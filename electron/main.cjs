@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, clipboard, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -72,6 +72,170 @@ function dataUrlBuffer(dataUrl) {
   if (!match) throw new Error('잘못된 이미지 데이터입니다.');
   return { mime: match[1], buffer: Buffer.from(match[2], 'base64') };
 }
+
+// --- 파트D: 채널 브랜드 템플릿 영속화 (로컬 JSON, 앱 재실행 후에도 유지) ---
+function brandTemplatesPath() {
+  return path.join(app.getPath('userData'), 'brand-templates.json');
+}
+function readBrandTemplates() {
+  try {
+    const raw = fs.readFileSync(brandTemplatesPath(), 'utf-8');
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+function writeBrandTemplates(list) {
+  fs.mkdirSync(path.dirname(brandTemplatesPath()), { recursive: true });
+  fs.writeFileSync(brandTemplatesPath(), JSON.stringify(list, null, 2));
+}
+
+// --- 파트F: AI 이미지 설정(Qwen + Gemini). API 키는 가능하면 OS 자격 증명 저장소로 암호화해 로컬에만 보관한다. ---
+function aiSettingsPath() {
+  return path.join(app.getPath('userData'), 'ai-settings.json');
+}
+function decryptOrEmpty(enc) {
+  if (!enc) return '';
+  try { return safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(Buffer.from(enc, 'base64')) : ''; } catch { return ''; }
+}
+function encryptOrEmpty(plain) {
+  if (!plain || !safeStorage.isEncryptionAvailable()) return '';
+  return safeStorage.encryptString(plain).toString('base64');
+}
+const AI_SETTINGS_DEFAULTS = {
+  provider: 'qwen',
+  qwenApiKey: '', qwenWorkspaceId: '', qwenRegion: 'singapore', qwenModel: 'qwen-image-2.0-pro',
+  geminiApiKey: '', geminiModel: 'gemini-3.1-flash-image'
+};
+function readAISettings() {
+  try {
+    const raw = fs.readFileSync(aiSettingsPath(), 'utf-8');
+    const parsed = JSON.parse(raw);
+    return {
+      provider: parsed.provider === 'gemini' ? 'gemini' : 'qwen',
+      qwenApiKey: decryptOrEmpty(parsed.qwenApiKeyEnc),
+      qwenWorkspaceId: parsed.qwenWorkspaceId || '',
+      qwenRegion: parsed.qwenRegion === 'beijing' ? 'beijing' : 'singapore',
+      qwenModel: parsed.qwenModel || AI_SETTINGS_DEFAULTS.qwenModel,
+      geminiApiKey: decryptOrEmpty(parsed.geminiApiKeyEnc),
+      geminiModel: parsed.geminiModel || AI_SETTINGS_DEFAULTS.geminiModel
+    };
+  } catch {
+    return { ...AI_SETTINGS_DEFAULTS };
+  }
+}
+function writeAISettings(settings) {
+  fs.mkdirSync(path.dirname(aiSettingsPath()), { recursive: true });
+  const payload = {
+    provider: settings.provider === 'gemini' ? 'gemini' : 'qwen',
+    qwenWorkspaceId: settings.qwenWorkspaceId || '',
+    qwenRegion: settings.qwenRegion === 'beijing' ? 'beijing' : 'singapore',
+    qwenModel: settings.qwenModel || AI_SETTINGS_DEFAULTS.qwenModel,
+    qwenApiKeyEnc: encryptOrEmpty(settings.qwenApiKey),
+    geminiModel: settings.geminiModel || AI_SETTINGS_DEFAULTS.geminiModel,
+    geminiApiKeyEnc: encryptOrEmpty(settings.geminiApiKey)
+  };
+  fs.writeFileSync(aiSettingsPath(), JSON.stringify(payload, null, 2));
+}
+
+const REGION_HOST = { singapore: 'ap-southeast-1', beijing: 'cn-beijing' };
+const MASK = '••••••••';
+
+async function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 파트G: 실패 시 조용히 넘어가지 않고, 최대 2회까지만 재시도한 뒤 마지막 실패 사유를 그대로 던진다(무한 재시도 금지).
+async function withRetry(fn, maxRetries = 2) {
+  let lastError;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn(attempt);
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxRetries) log(`[AI 배경] 시도 ${attempt + 1} 실패, 재시도합니다: ${error.message}`);
+    }
+  }
+  throw lastError;
+}
+
+async function generateQwenBackground(settings, prompt, negativePrompt, size) {
+  if (!settings.qwenApiKey) throw new Error('Qwen API 키가 설정되어 있지 않습니다. 설정 화면에서 키를 입력하거나, 프롬프트 복사 폴백을 사용하세요.');
+  if (!settings.qwenWorkspaceId) throw new Error('Qwen 워크스페이스 ID가 설정되어 있지 않습니다.');
+
+  const host = REGION_HOST[settings.qwenRegion] || REGION_HOST.singapore;
+  const url = `https://${settings.qwenWorkspaceId}.${host}.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation`;
+  const body = {
+    model: settings.qwenModel,
+    input: { messages: [{ role: 'user', content: [{ text: prompt }] }] },
+    parameters: { negative_prompt: negativePrompt || '', size: size || '1328*1328', n: 1, prompt_extend: true, watermark: false }
+  };
+
+  const response = await fetchWithTimeout(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${settings.qwenApiKey}` },
+    body: JSON.stringify(body)
+  }, 60000);
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`Qwen 이미지 생성 실패 (HTTP ${response.status}): ${text.slice(0, 300) || '응답 없음'}`);
+  }
+  const json = await response.json();
+  const imageUrl = json && json.output && json.output.choices && json.output.choices[0] && json.output.choices[0].message && json.output.choices[0].message.content && json.output.choices[0].message.content[0] && json.output.choices[0].message.content[0].image;
+  if (!imageUrl) throw new Error('Qwen 응답에서 이미지 URL을 찾지 못했습니다.');
+
+  const imageResponse = await fetchWithTimeout(imageUrl, {}, 60000);
+  if (!imageResponse.ok) throw new Error('생성된 이미지를 내려받지 못했습니다.');
+  const buffer = Buffer.from(await imageResponse.arrayBuffer());
+  const contentType = imageResponse.headers.get('content-type') || 'image/png';
+  return `data:${contentType};base64,${buffer.toString('base64')}`;
+}
+
+// Gemini(generateContent + responseModalities:IMAGE, imageConfig.aspectRatio) — 2026-07 공식 문서 기준.
+async function generateGeminiBackground(settings, prompt, aspect) {
+  if (!settings.geminiApiKey) throw new Error('Gemini API 키가 설정되어 있지 않습니다. 설정 화면에서 키를 입력하거나, 프롬프트 복사 폴백을 사용하세요.');
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${settings.geminiModel}:generateContent`;
+  const body = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      responseModalities: ['TEXT', 'IMAGE'],
+      imageConfig: { aspectRatio: aspect === '1x1' ? '1:1' : '16:9' }
+    }
+  };
+
+  const response = await fetchWithTimeout(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': settings.geminiApiKey },
+    body: JSON.stringify(body)
+  }, 60000);
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`Gemini 이미지 생성 실패 (HTTP ${response.status}): ${text.slice(0, 300) || '응답 없음'}`);
+  }
+  const json = await response.json();
+  const parts = json && json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts;
+  const imagePart = Array.isArray(parts) ? parts.find(part => part.inlineData && part.inlineData.data) : null;
+  if (!imagePart) throw new Error('Gemini 응답에서 이미지 데이터를 찾지 못했습니다.');
+  const mime = imagePart.inlineData.mimeType || 'image/png';
+  return `data:${mime};base64,${imagePart.inlineData.data}`;
+}
+
+async function generateAIBackground({ prompt, negativePrompt, size, aspect }) {
+  const settings = readAISettings();
+  return withRetry(() => (
+    settings.provider === 'gemini'
+      ? generateGeminiBackground(settings, prompt, aspect || '16x9')
+      : generateQwenBackground(settings, prompt, negativePrompt, size)
+  ), 2);
+}
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -123,13 +287,47 @@ ipcMain.handle('audio:probe', (_event, filePath) => probe(filePath));
 ipcMain.handle('thumbnail:save', async (_event, input) => {
   const { buffer } = dataUrlBuffer(input.dataUrl);
   const outputDir = input.outputDir || app.getPath('downloads');
-  fs.mkdirSync(outputDir, { recursive: true });
   const ext = input.format === 'png' ? '.png' : '.jpg';
-  const dest = path.join(outputDir, `${safeName(input.fileName, 'thumbnail')}${ext}`);
+  // fileName에 "폴더/파일" 형태의 상대경로가 들어와도(파트E 세트 폴더 자동 생성) 각 구간을 안전화한다.
+  const segments = String(input.fileName || 'thumbnail').split(/[\\/]+/).filter(Boolean).map(part => safeName(part, 'file'));
+  const relative = segments.length ? segments : ['thumbnail'];
+  const dest = path.join(outputDir, ...relative.slice(0, -1), `${relative[relative.length - 1]}${ext}`);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.writeFileSync(dest, buffer);
   return dest;
 });
 ipcMain.handle('shell:open-path', (_event, targetPath) => shell.openPath(targetPath));
+ipcMain.handle('brand:load-templates', () => readBrandTemplates());
+ipcMain.handle('brand:save-template', (_event, template) => {
+  const list = readBrandTemplates().filter(item => item.channelPreset !== template.channelPreset);
+  list.push({ ...template, updatedAt: new Date().toISOString() });
+  writeBrandTemplates(list);
+  return list;
+});
+ipcMain.handle('brand:delete-template', (_event, channelPreset) => {
+  const list = readBrandTemplates().filter(item => item.channelPreset !== channelPreset);
+  writeBrandTemplates(list);
+  return list;
+});
+ipcMain.handle('settings:load-ai', () => {
+  const settings = readAISettings();
+  return {
+    ...settings,
+    qwenApiKey: settings.qwenApiKey ? MASK : '',
+    geminiApiKey: settings.geminiApiKey ? MASK : '',
+    hasQwenKey: Boolean(settings.qwenApiKey),
+    hasGeminiKey: Boolean(settings.geminiApiKey)
+  };
+});
+ipcMain.handle('settings:save-ai', (_event, settings) => {
+  const current = readAISettings();
+  const qwenApiKey = settings.qwenApiKey && settings.qwenApiKey !== MASK ? settings.qwenApiKey : current.qwenApiKey;
+  const geminiApiKey = settings.geminiApiKey && settings.geminiApiKey !== MASK ? settings.geminiApiKey : current.geminiApiKey;
+  writeAISettings({ ...settings, qwenApiKey, geminiApiKey });
+  return { ok: true };
+});
+ipcMain.handle('ai:generate-background', (_event, input) => generateAIBackground(input));
+ipcMain.handle('clipboard:write-text', (_event, text) => { clipboard.writeText(String(text || '')); return true; });
 ipcMain.handle('playlist:cancel', (_event, jobId) => {
   const child = activeJobs.get(jobId);
   if (child) child.kill('SIGKILL');

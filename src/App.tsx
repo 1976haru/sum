@@ -1,9 +1,17 @@
-import { useMemo, useState } from 'react';
-import { Clapperboard, Coffee, Image, Settings2 } from 'lucide-react';
-import ThumbnailStudio from './components/ThumbnailStudio';
+import { useEffect, useMemo, useState } from 'react';
+import { Clapperboard, Coffee, LayoutGrid } from 'lucide-react';
 import VideoStudio from './components/VideoStudio';
+import Sidebar from './components/Sidebar';
+import PreviewPanel from './components/PreviewPanel';
+import SettingsScreen from './components/SettingsScreen';
+import StepShell from './components/steps/StepShell';
+import BackgroundStep from './components/steps/BackgroundStep';
+import CaptionStep from './components/steps/CaptionStep';
+import StyleStep from './components/steps/StyleStep';
+import ExportStep from './components/steps/ExportStep';
 import { defaultSubline } from './lib/headlines';
-import type { ChannelPresetId, Language, ProjectConfig } from './types';
+import { defaultCoverConfig } from './lib/cover';
+import type { AIImageSettings, AspectKind, BackgroundImage, ChannelBrandTemplate, ChannelPresetId, Language, ProjectConfig } from './types';
 
 const DEFAULT_CONFIG: ProjectConfig = {
   projectName: 'Winter_Cafe_Playlist',
@@ -13,29 +21,49 @@ const DEFAULT_CONFIG: ProjectConfig = {
   mood: '밝고 따뜻한 카페',
   headline: '문득, 그날이 떠올랐다',
   subline: '카페에서 듣기 좋은 감성 팝 플레이리스트',
-  textSide: 'left',
+  textZone: 'left-third',
   layout: 'editorial',
   background: '#f4ead8',
   accent: '#b4833f',
   textColor: '#17304f',
-  overlayStrength: 0.72
+  overlayStrength: 0.72,
+  fontStyle: 'serif-thin',
+  autoTextColor: true,
+  brandLine: 'P L A Y L I S T',
+  showBadge: true,
+  showDivider: true,
+  showSubline: true
 };
 
+type View = 'studio' | 'video' | 'settings';
+
 export default function App() {
-  const [tab, setTab] = useState<'thumbnail' | 'video'>('thumbnail');
+  const [view, setView] = useState<View>('studio');
   const [config, setConfig] = useState<ProjectConfig>(DEFAULT_CONFIG);
+  const [images, setImages] = useState<BackgroundImage[]>([]);
+  const [coverHeadline, setCoverHeadline] = useState('그날, 로마에서');
   const [outputDir, setOutputDir] = useState('');
   const [thumbnailPath, setThumbnailPath] = useState('');
+  const [expandedStep, setExpandedStep] = useState(0);
+  const [exported, setExported] = useState(false);
+  const [aiSettings, setAiSettings] = useState<(AIImageSettings & { hasQwenKey?: boolean; hasGeminiKey?: boolean }) | null>(null);
+  const [aspect, setAspect] = useState<AspectKind>('16x9');
 
   const channelLabel = useMemo(() => {
-    if (config.channelPreset === 'morning-showa-cafe') return 'Morning Showa Café';
-    if (config.channelPreset === 'custom') return 'Custom Channel';
-    return 'Light Pop Lounge';
+    if (config.channelPreset === 'morning-showa-cafe') return '아침의쇼와카페';
+    if (config.channelPreset === 'custom') return 'Custom';
+    return '굿모닝추억라디오';
   }, [config.channelPreset]);
 
   function patchConfig(patch: Partial<ProjectConfig>) {
     setConfig(current => ({ ...current, ...patch }));
   }
+
+  function refreshAiSettings() {
+    void window.sumAPI.loadAISettings().then(setAiSettings);
+  }
+  useEffect(refreshAiSettings, []);
+  const aiReady = Boolean(aiSettings && (aiSettings.provider === 'gemini' ? aiSettings.hasGeminiKey : aiSettings.hasQwenKey));
 
   function changePreset(value: ChannelPresetId) {
     const language: Language = value === 'morning-showa-cafe' ? 'ja' : value === 'light-pop-lounge' ? 'ko' : config.language;
@@ -48,6 +76,43 @@ export default function App() {
     }));
   }
 
+  // 파트D: 채널을 바꾸면 저장된 브랜드 템플릿을 자동으로 적용해 동일 톤을 유지한다.
+  useEffect(() => {
+    let cancelled = false;
+    void window.sumAPI.loadBrandTemplates().then((templates: ChannelBrandTemplate[]) => {
+      if (cancelled) return;
+      const match = templates.find(item => item.channelPreset === config.channelPreset);
+      if (!match) return;
+      setConfig(current => ({
+        ...current,
+        fontStyle: match.fontStyle,
+        textColor: match.textColor,
+        accent: match.accent,
+        overlayStrength: match.overlayStrength,
+        autoTextColor: match.autoTextColor,
+        textZone: match.textZone,
+        subline: match.subline,
+        brandLine: match.brandLine,
+        showBadge: match.showBadge,
+        showDivider: match.showDivider,
+        showSubline: match.showSubline
+      }));
+    });
+    return () => { cancelled = true; };
+  }, [config.channelPreset]);
+
+  const coverBase = useMemo(() => defaultCoverConfig(config), [config]);
+
+  const stepComplete = [images.length > 0, config.headline.trim().length > 0, images.length > 0 && config.headline.trim().length > 0, exported];
+
+  if (view === 'settings') {
+    return (
+      <main className="app-shell">
+        <SettingsScreen onBack={() => setView('studio')} onSaved={refreshAiSettings} />
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
       <header className="app-header">
@@ -57,23 +122,55 @@ export default function App() {
 
       <section className="project-bar panel">
         <div className="project-field wide"><label>프로젝트 이름</label><input value={config.projectName} onChange={event => patchConfig({ projectName: event.target.value })} /></div>
-        <div className="project-field"><label>채널</label><select value={config.channelPreset} onChange={event => changePreset(event.target.value as ChannelPresetId)}><option value="light-pop-lounge">Light Pop Lounge</option><option value="morning-showa-cafe">Morning Showa Café</option><option value="custom">직접 설정</option></select></div>
-        <div className="project-field"><label>언어</label><select value={config.language} onChange={event => { const language = event.target.value as Language; patchConfig({ language, subline: defaultSubline(language, config.channelPreset) }); }}><option value="ko">한국어</option><option value="ja">日本語</option><option value="en">English</option></select></div>
         <div className="project-field"><label>계절</label><input value={config.season} onChange={event => patchConfig({ season: event.target.value })} /></div>
         <div className="project-field wide"><label>분위기</label><input value={config.mood} onChange={event => patchConfig({ mood: event.target.value })} /></div>
-        <div className="palette-fields"><label title="제목 색"><input type="color" value={config.textColor} onChange={event => patchConfig({ textColor: event.target.value })} /></label><label title="포인트 색"><input type="color" value={config.accent} onChange={event => patchConfig({ accent: event.target.value })} /></label></div>
       </section>
 
       <nav className="main-tabs">
-        <button className={tab === 'thumbnail' ? 'active' : ''} onClick={() => setTab('thumbnail')}><Image size={18} /> 썸네일 자동생성</button>
-        <button className={tab === 'video' ? 'active' : ''} onClick={() => setTab('video')}><Clapperboard size={18} /> 영상·CapCut 자동화</button>
-        <span><Settings2 size={16} /> 로컬 처리 · API 불필요</span>
+        <button className={view === 'studio' ? 'active' : ''} onClick={() => setView('studio')}><LayoutGrid size={18} /> 썸네일·커버 스튜디오</button>
+        <button className={view === 'video' ? 'active' : ''} onClick={() => setView('video')}><Clapperboard size={18} /> 영상·CapCut 자동화</button>
+        <span>로컬 처리</span>
       </nav>
 
-      {tab === 'thumbnail' ? (
-        <ThumbnailStudio config={config} onConfigChange={patchConfig} outputDir={outputDir} onOutputDirChange={setOutputDir} onThumbnailSaved={setThumbnailPath} />
-      ) : (
+      {view === 'video' && (
         <VideoStudio projectName={config.projectName} outputDir={outputDir} onOutputDirChange={setOutputDir} thumbnailPath={thumbnailPath} onThumbnailPathChange={setThumbnailPath} />
+      )}
+
+      {view === 'studio' && (
+        <div className="studio-shell">
+          <Sidebar config={config} onChannelChange={changePreset} onOpenSettings={() => setView('settings')} aiReady={aiReady} />
+
+          <div className="studio-steps">
+            <StepShell index={1} title="배경 이미지" subtitle="내 사진 · AI 생성 · 프롬프트 복사" complete={stepComplete[0]} expanded={expandedStep === 0} onToggle={() => setExpandedStep(current => current === 0 ? -1 : 0)}>
+              <BackgroundStep images={images} onImagesChange={setImages} textZone={config.textZone} aspect={aspect} />
+            </StepShell>
+
+            <StepShell index={2} title="문구" subtitle="메인 제목 · 부제 · 커버 문구" complete={stepComplete[1]} expanded={expandedStep === 1} onToggle={() => setExpandedStep(current => current === 1 ? -1 : 1)}>
+              <CaptionStep
+                language={config.language}
+                onLanguageChange={language => patchConfig({ language, subline: defaultSubline(language, config.channelPreset) })}
+                headline={config.headline}
+                onHeadlineChange={headline => patchConfig({ headline })}
+                subline={config.subline}
+                onSublineChange={subline => patchConfig({ subline })}
+                brandLine={config.brandLine}
+                onBrandLineChange={brandLine => patchConfig({ brandLine })}
+                coverHeadline={coverHeadline}
+                onCoverHeadlineChange={setCoverHeadline}
+              />
+            </StepShell>
+
+            <StepShell index={3} title="스타일 조정" subtitle="채널 브랜드 템플릿" complete={stepComplete[2]} expanded={expandedStep === 2} onToggle={() => setExpandedStep(current => current === 2 ? -1 : 2)}>
+              <StyleStep config={config} onConfigChange={patchConfig} />
+            </StepShell>
+
+            <StepShell index={4} title="내보내기" subtitle="단일 저장 · 세트 일괄 생성" complete={stepComplete[3]} expanded={expandedStep === 3} onToggle={() => setExpandedStep(current => current === 3 ? -1 : 3)}>
+              <ExportStep config={config} coverBase={coverBase} coverHeadline={coverHeadline} images={images} outputDir={outputDir} onOutputDirChange={setOutputDir} channelLabel={channelLabel} onExported={() => setExported(true)} />
+            </StepShell>
+          </div>
+
+          <PreviewPanel aspect={aspect} onAspectChange={setAspect} config={config} coverBase={coverBase} coverHeadline={coverHeadline} image={images[0]} />
+        </div>
       )}
     </main>
   );

@@ -11,6 +11,13 @@ contextBridge.exposeInMainWorld('sumAPI', {
   cancelRender: (jobId) => ipcRenderer.invoke('playlist:cancel', jobId),
   exportCapcutKit: (input) => ipcRenderer.invoke('capcut:export-kit', input),
   openPath: (targetPath) => ipcRenderer.invoke('shell:open-path', targetPath),
+  loadBrandTemplates: () => ipcRenderer.invoke('brand:load-templates'),
+  saveBrandTemplate: (template) => ipcRenderer.invoke('brand:save-template', template),
+  deleteBrandTemplate: (channelPreset) => ipcRenderer.invoke('brand:delete-template', channelPreset),
+  loadAISettings: () => ipcRenderer.invoke('settings:load-ai'),
+  saveAISettings: (settings) => ipcRenderer.invoke('settings:save-ai', settings),
+  generateAIBackground: (input) => ipcRenderer.invoke('ai:generate-background', input),
+  copyText: (text) => ipcRenderer.invoke('clipboard:write-text', text),
   onProgress: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('job:progress', listener);

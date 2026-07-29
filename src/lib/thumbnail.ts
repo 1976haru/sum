@@ -1,4 +1,7 @@
 import type { ThumbnailRenderInput } from '../types';
+import { titleFont } from './fonts';
+import { decideReadability, sampleAverageLuminance } from './readability';
+import { clampVerticalSafeArea, layoutText, makeCanvasMeasurer } from './textLayout';
 
 const WIDTH = 1280;
 const HEIGHT = 720;
@@ -12,78 +15,124 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   });
 }
 
-function cover(ctx: CanvasRenderingContext2D, image: HTMLImageElement, variantIndex = 0) {
-  const scale = Math.max(WIDTH / image.width, HEIGHT / image.height);
+function cover(ctx: CanvasRenderingContext2D, image: HTMLImageElement, width: number, height: number, variantIndex = 0) {
+  const scale = Math.max(width / image.width, height / image.height);
   const w = image.width * scale;
   const h = image.height * scale;
   const shift = [-0.12, 0, 0.12][variantIndex % 3] ?? 0;
-  const x = (WIDTH - w) / 2 + shift * Math.max(0, w - WIDTH);
-  const y = (HEIGHT - h) / 2;
+  const x = (width - w) / 2 + shift * Math.max(0, w - width);
+  const y = (height - h) / 2;
   ctx.drawImage(image, x, y, w, h);
 }
 
-function wrapLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
-  const words = text.trim().split(/\s+/);
-  const lines: string[] = [];
-  let line = '';
-  for (const word of words) {
-    const candidate = line ? `${line} ${word}` : word;
-    if (ctx.measureText(candidate).width <= maxWidth || !line) line = candidate;
-    else { lines.push(line); line = word; }
-  }
-  if (line) lines.push(line);
-  return lines.slice(0, 3);
-}
-
+// 좌측 1/3 경로는 최초 검증된 알고리즘 그대로 유지한다. 상단중앙/중앙은 그 위에 추가된 새 분기다.
 export async function renderThumbnail(input: ThumbnailRenderInput): Promise<string> {
+  const width = input.width || WIDTH;
+  const height = input.height || HEIGHT;
+  const scale = width / WIDTH; // 16:9 유지 오버라이드(1920x1080 등)에서도 동일 비율이므로 균일 스케일 사용
+
   const canvas = document.createElement('canvas');
-  canvas.width = input.width || WIDTH;
-  canvas.height = input.height || HEIGHT;
+  canvas.width = width;
+  canvas.height = height;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas를 사용할 수 없습니다.');
   const image = await loadImage(input.imageDataUrl);
-  cover(ctx, image, input.variantIndex || 0);
+  cover(ctx, image, width, height, input.variantIndex || 0);
 
-  const left = input.textSide === 'left';
-  const gradient = ctx.createLinearGradient(left ? 0 : WIDTH, 0, left ? WIDTH * 0.72 : WIDTH * 0.28, 0);
+  const isLeftThird = input.textZone === 'left-third';
+  const boxX = isLeftThird ? 74 * scale : width / 2;
+  const maxWidth = isLeftThird ? 530 * scale : width * 0.72;
+  const titleY = isLeftThird
+    ? (input.layout === 'minimal' ? 230 : input.layout === 'story' ? 172 : 205) * scale
+    : input.textZone === 'top-center' ? height * 0.14 : height * 0.4;
+  const startFontSize = isLeftThird ? (input.layout === 'minimal' ? 82 : 72) * scale : 78 * scale;
+  const minFontSize = 34 * scale;
+
+  // 파트C: 텍스트 영역 평균 휘도를 측정해 글자색/스크림을 자동 전환한다.
+  const sampleX = isLeftThird ? boxX : boxX - maxWidth / 2;
+  const sampleWidth = isLeftThird ? Math.min(maxWidth + boxX, width) - boxX : maxWidth;
+  const luminance = input.autoTextColor
+    ? sampleAverageLuminance(ctx, sampleX, 0, Math.max(1, sampleWidth), height)
+    : null;
+  const auto = luminance !== null ? decideReadability(luminance) : null;
+  const textColor = auto ? auto.textColor : input.textColor;
+  const scrimRGB = auto ? auto.scrimRGB : ([248, 242, 230] as [number, number, number]);
   const alpha = Math.max(0.25, Math.min(0.9, input.overlayStrength));
-  gradient.addColorStop(0, `rgba(248,242,230,${alpha})`);
-  gradient.addColorStop(0.68, `rgba(248,242,230,${alpha * 0.75})`);
-  gradient.addColorStop(1, 'rgba(248,242,230,0)');
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  const [sr, sg, sb] = scrimRGB;
 
-  const boxX = left ? 74 : 670;
-  const maxWidth = 530;
-  const titleY = input.layout === 'minimal' ? 230 : input.layout === 'story' ? 172 : 205;
-  const titleSize = input.layout === 'minimal' ? 82 : 72;
+  ctx.textAlign = isLeftThird ? 'left' : 'center';
+  ctx.textBaseline = 'top';
+  const measure = makeCanvasMeasurer(ctx, size => titleFont(input.fontStyle, size));
+  const footerHeight = 96 * scale;
+  const safeBottom = height * 0.95;
+  const layout = layoutText(input.headline, {
+    measure,
+    maxWidth,
+    maxHeight: Math.max(startFontSize, safeBottom - titleY - footerHeight),
+    startFontSize,
+    minFontSize,
+    maxLines: 3
+  });
+  const blockHeight = layout.lines.length * layout.lineHeight;
+  const startY = clampVerticalSafeArea(titleY, blockHeight, height, 0.05);
 
-  if (input.layout === 'story') {
+  if (isLeftThird) {
+    // 검증된 좌측 사이드 그라디언트 스크림.
+    const gradient = ctx.createLinearGradient(0, 0, width * 0.72, 0);
+    gradient.addColorStop(0, `rgba(${sr},${sg},${sb},${alpha})`);
+    gradient.addColorStop(0.68, `rgba(${sr},${sg},${sb},${alpha * 0.75})`);
+    gradient.addColorStop(1, `rgba(${sr},${sg},${sb},0)`);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, width, height);
+  } else {
+    // 상단중앙/중앙: 텍스트 블록을 감싸는 수평 밴드 스크림(커버 렌더러와 동일한 방식).
+    const padY = 60 * scale;
+    const bandTop = Math.max(0, startY - padY);
+    const bandHeight = Math.min(height, blockHeight + footerHeight + padY * 2);
+    const gradient = ctx.createLinearGradient(0, bandTop, 0, bandTop + bandHeight);
+    gradient.addColorStop(0, `rgba(${sr},${sg},${sb},0)`);
+    gradient.addColorStop(0.2, `rgba(${sr},${sg},${sb},${alpha})`);
+    gradient.addColorStop(0.8, `rgba(${sr},${sg},${sb},${alpha})`);
+    gradient.addColorStop(1, `rgba(${sr},${sg},${sb},0)`);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, bandTop, width, bandHeight);
+  }
+
+  if (isLeftThird && input.layout === 'story') {
     ctx.fillStyle = 'rgba(255,255,255,0.18)';
     ctx.beginPath();
-    ctx.roundRect(boxX - 26, titleY - 28, 590, 360, 28);
+    ctx.roundRect(boxX - 26 * scale, titleY - 28 * scale, 590 * scale, 360 * scale, 28 * scale);
     ctx.fill();
   }
 
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
-  ctx.fillStyle = input.textColor;
-  ctx.font = `700 ${titleSize}px "Batang", "Yu Mincho", "Noto Serif KR", Georgia, serif`;
-  const lines = wrapLines(ctx, input.headline, maxWidth);
-  lines.forEach((line, index) => ctx.fillText(line, boxX, titleY + index * (titleSize + 14)));
+  ctx.fillStyle = textColor;
+  layout.lines.forEach((line, index) => {
+    ctx.font = titleFont(input.fontStyle, layout.fontSize);
+    ctx.fillText(line, boxX, startY + index * layout.lineHeight);
+  });
 
-  const lineY = titleY + lines.length * (titleSize + 14) + 14;
-  ctx.fillStyle = input.accent;
-  ctx.fillRect(boxX, lineY, 410, 2);
-  ctx.beginPath();
-  ctx.arc(boxX + 205, lineY + 1, 5, 0, Math.PI * 2);
-  ctx.fill();
+  let lineY = startY + blockHeight + 10 * scale;
+  const dividerStartX = isLeftThird ? boxX : boxX - 205 * scale;
+  if (input.showDivider) {
+    ctx.fillStyle = input.accent;
+    ctx.fillRect(dividerStartX, lineY, 410 * scale, 1.5 * scale);
+    ctx.beginPath();
+    ctx.arc(dividerStartX + 205 * scale, lineY + 1, 4 * scale, 0, Math.PI * 2);
+    ctx.fill();
+    lineY += 8 * scale;
+  }
 
-  ctx.font = '500 30px "Malgun Gothic", "Yu Gothic", sans-serif';
-  ctx.fillText(input.subline, boxX, lineY + 26);
+  if (input.showSubline && input.subline) {
+    ctx.fillStyle = textColor;
+    ctx.font = `500 ${26 * scale}px "Malgun Gothic", "Yu Gothic", sans-serif`;
+    ctx.fillText(input.subline, boxX, lineY + 22 * scale);
+  }
 
-  ctx.font = '600 21px Georgia, serif';
-  ctx.fillText('P L A Y L I S T', boxX, lineY + 78);
+  if (input.showBadge && input.brandLine) {
+    ctx.fillStyle = textColor;
+    ctx.font = `600 ${18 * scale}px Georgia, serif`;
+    ctx.fillText(input.brandLine, boxX, lineY + 66 * scale);
+  }
 
   return canvas.toDataURL('image/jpeg', 0.94);
 }
