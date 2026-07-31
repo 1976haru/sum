@@ -200,7 +200,7 @@ export default function App() {
             </StepShell>
           </div>
 
-          <PreviewPanel aspect={aspect} onAspectChange={setAspect} config={config} coverBase={coverBase} coverHeadline={coverHeadline} image={images[0]} />
+          <PreviewPanel aspect={aspect} onAspectChange={setAspect} config={config} coverBase={coverBase} coverHeadline={coverHeadline} image={images[0]} onTextBoxCommit={patchConfig} />
         </div>
       )}
     </main>

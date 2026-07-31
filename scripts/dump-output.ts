@@ -10,7 +10,8 @@ import {
   buildPromptVariants
 } from '../src/lib/promptBuilder';
 import { buildReleaseMetadataText } from '../src/lib/releaseMeta';
-import type { SeasonPresetId, TimePresetId } from '../src/types';
+import { resolveTextBox } from '../src/lib/textBox';
+import type { LayoutId, SeasonPresetId, TextZone, TimePresetId } from '../src/types';
 
 // 린터(promptBuilder.test.ts)와 동일한 어휘 목록. 이 스크립트는 판정하지 않으므로
 // 여기서의 카운트는 참고용 요약일 뿐, 통과/실패 기준은 테스트 쪽에 있다.
@@ -84,6 +85,27 @@ console.log(buildReleaseMetadataText({
   coverHeadline: '그날, 로마에서',
   generatedAt: '2026-07-31T00:00:00.000Z'
 }));
+
+section('6) resolveTextBox — 프리셋 3종 x 해상도별(640/1280/1920) 좌표');
+const ZONES: TextZone[] = ['left-third', 'top-center', 'center'];
+const RESOLUTIONS: Array<{ width: number; height: number }> = [
+  { width: 640, height: 360 },
+  { width: 1280, height: 720 },
+  { width: 1920, height: 1080 }
+];
+for (const zone of ZONES) {
+  console.log(`\n--- ${zone} ---`);
+  for (const res of RESOLUTIONS) {
+    const box = resolveTextBox({ textZone: zone, layout: 'editorial' }, res.width, res.height);
+    const label = `${res.width}x${res.height}`.padEnd(10);
+    console.log(`  ${label} boxX=${box.boxX.toFixed(2)} boxY=${box.boxY.toFixed(2)} maxWidth=${box.maxWidth.toFixed(2)} align=${box.align} scrimMode=${box.scrimMode}`);
+  }
+}
+console.log('\nleft-third는 layout에 따라 boxY가 세 갈래다(1280x720 기준, scale=1):');
+for (const layout of ['editorial', 'minimal', 'story'] as LayoutId[]) {
+  const box = resolveTextBox({ textZone: 'left-third', layout }, 1280, 720);
+  console.log(`  layout=${layout.padEnd(10)} boxY=${box.boxY}`);
+}
 
 section('요약');
 console.log(`조명 어휘 중복이 발견된 계절×시간대 조합 수: ${duplicateComboCount} / ${SEASON_IDS.length * TIME_IDS.length}`);

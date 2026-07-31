@@ -2,9 +2,10 @@ import type { ThumbnailRenderInput } from '../types';
 import { titleFont } from './fonts';
 import { decideReadability, sampleAverageLuminance } from './readability';
 import { clampVerticalSafeArea, layoutText, makeCanvasMeasurer } from './textLayout';
+import { REFERENCE_HEIGHT, REFERENCE_WIDTH, resolveTextBox } from './textBox';
 
-const WIDTH = 1280;
-const HEIGHT = 720;
+const WIDTH = REFERENCE_WIDTH;
+const HEIGHT = REFERENCE_HEIGHT;
 
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -39,18 +40,19 @@ export async function renderThumbnail(input: ThumbnailRenderInput): Promise<stri
   const image = await loadImage(input.imageDataUrl);
   cover(ctx, image, width, height, input.variantIndex || 0);
 
-  const isLeftThird = input.textZone === 'left-third';
-  const boxX = isLeftThird ? 74 * scale : width / 2;
-  const maxWidth = isLeftThird ? 530 * scale : width * 0.72;
-  const titleY = isLeftThird
-    ? (input.layout === 'minimal' ? 230 : input.layout === 'story' ? 172 : 205) * scale
-    : input.textZone === 'top-center' ? height * 0.14 : height * 0.4;
-  const startFontSize = isLeftThird ? (input.layout === 'minimal' ? 82 : 72) * scale : 78 * scale;
+  // 파트: 모든 좌표 계산은 resolveTextBox() 하나로 통일한다. textBox가 있으면 드래그로
+  // 잡은 정규화 좌표를, 없으면 기존 textZone 프리셋(숫자 변경 금지)을 그대로 반환한다.
+  const box = resolveTextBox(input, width, height);
+  const { boxX, maxWidth, align, scrimMode } = box;
+  const titleY = box.boxY;
+  const isSide = scrimMode === 'side';
+  const startFontSize = align === 'left' ? (input.layout === 'minimal' ? 82 : 72) * scale : 78 * scale;
   const minFontSize = 34 * scale;
 
   // 파트C: 텍스트 영역 평균 휘도를 측정해 글자색/스크림을 자동 전환한다.
-  const sampleX = isLeftThird ? boxX : boxX - maxWidth / 2;
-  const sampleWidth = isLeftThird ? Math.min(maxWidth + boxX, width) - boxX : maxWidth;
+  // 샘플링 방식 자체는 이번 작업에서 손대지 않는다(Phase 1-3 과제) — side/band 분기만 유지.
+  const sampleX = isSide ? boxX : boxX - maxWidth / 2;
+  const sampleWidth = isSide ? Math.min(maxWidth + boxX, width) - boxX : maxWidth;
   const luminance = input.autoTextColor
     ? sampleAverageLuminance(ctx, sampleX, 0, Math.max(1, sampleWidth), height)
     : null;
@@ -60,7 +62,7 @@ export async function renderThumbnail(input: ThumbnailRenderInput): Promise<stri
   const alpha = Math.max(0.25, Math.min(0.9, input.overlayStrength));
   const [sr, sg, sb] = scrimRGB;
 
-  ctx.textAlign = isLeftThird ? 'left' : 'center';
+  ctx.textAlign = align;
   ctx.textBaseline = 'top';
   const measure = makeCanvasMeasurer(ctx, size => titleFont(input.fontStyle, size));
   const footerHeight = 96 * scale;
@@ -76,7 +78,7 @@ export async function renderThumbnail(input: ThumbnailRenderInput): Promise<stri
   const blockHeight = layout.lines.length * layout.lineHeight;
   const startY = clampVerticalSafeArea(titleY, blockHeight, height, 0.05);
 
-  if (isLeftThird) {
+  if (isSide) {
     // 검증된 좌측 사이드 그라디언트 스크림.
     const gradient = ctx.createLinearGradient(0, 0, width * 0.72, 0);
     gradient.addColorStop(0, `rgba(${sr},${sg},${sb},${alpha})`);
@@ -98,7 +100,7 @@ export async function renderThumbnail(input: ThumbnailRenderInput): Promise<stri
     ctx.fillRect(0, bandTop, width, bandHeight);
   }
 
-  if (isLeftThird && input.layout === 'story') {
+  if (isSide && input.layout === 'story') {
     ctx.fillStyle = 'rgba(255,255,255,0.18)';
     ctx.beginPath();
     ctx.roundRect(boxX - 26 * scale, titleY - 28 * scale, 590 * scale, 360 * scale, 28 * scale);
@@ -112,7 +114,7 @@ export async function renderThumbnail(input: ThumbnailRenderInput): Promise<stri
   });
 
   let lineY = startY + blockHeight + 10 * scale;
-  const dividerStartX = isLeftThird ? boxX : boxX - 205 * scale;
+  const dividerStartX = align === 'left' ? boxX : boxX - 205 * scale;
   if (input.showDivider) {
     ctx.fillStyle = input.accent;
     ctx.fillRect(dividerStartX, lineY, 410 * scale, 1.5 * scale);

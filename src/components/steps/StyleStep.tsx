@@ -20,6 +20,7 @@ function templateFromConfig(config: ProjectConfig, artistName: string): ChannelB
     overlayStrength: config.overlayStrength,
     autoTextColor: config.autoTextColor,
     textZone: config.textZone,
+    textBox: config.textBox,
     subline: config.subline,
     brandLine: config.brandLine,
     artistName,
@@ -46,6 +47,7 @@ export default function StyleStep({ config, onConfigChange, artistName, onArtist
       overlayStrength: template.overlayStrength,
       autoTextColor: template.autoTextColor,
       textZone: template.textZone,
+      textBox: template.textBox,
       subline: template.subline,
       brandLine: template.brandLine,
       showBadge: template.showBadge,
@@ -82,6 +84,12 @@ export default function StyleStep({ config, onConfigChange, artistName, onArtist
           {Object.entries(TEXT_ZONE_LABELS).map(([zone, label]) => <option key={zone} value={zone}>{label}</option>)}
         </select></label>
       </div>
+      {config.textBox && (
+        <p className="supporting">
+          <span className="textbox-custom-badge">직접 조정됨</span> 미리보기에서 드래그로 위치를 직접 잡았습니다 — 위 프리셋 선택은 무시됩니다.
+          <button type="button" className="secondary" onClick={() => onConfigChange({ textBox: undefined })}>프리셋으로 되돌리기</button>
+        </p>
+      )}
 
       <div className="field-grid">
         <label>글자 색<input type="color" value={config.textColor} onChange={event => onConfigChange({ textColor: event.target.value })} /></label>

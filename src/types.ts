@@ -24,6 +24,15 @@ export interface AudioTrack extends PickedFile {
   duration: number;
 }
 
+// 스텝③ 미리보기에서 드래그로 직접 배치한 텍스트 박스. 모든 값은 0~1 정규화 좌표다
+// (픽셀로 저장하면 640px 미리보기 / 168px 축소 / 1920px 실제 출력에서 서로 다른 위치가 찍힌다).
+export interface TextBox {
+  x: number;      // 0~1, 정렬 기준점의 가로 위치
+  y: number;      // 0~1, 블록 상단
+  width: number;  // 0~1, maxWidth
+  align: 'left' | 'center';
+}
+
 export interface ProjectConfig {
   projectName: string;
   channelPreset: ChannelPresetId;
@@ -33,6 +42,8 @@ export interface ProjectConfig {
   headline: string;
   subline: string;
   textZone: TextZone;
+  // textBox가 있으면 textZone 프리셋 대신 이 값을 쓴다. 없으면(undefined) 기존 프리셋 동작 그대로.
+  textBox?: TextBox;
   layout: LayoutId;
   background: string;
   accent: string;
@@ -80,6 +91,7 @@ export interface ChannelBrandTemplate {
   overlayStrength: number;
   autoTextColor: boolean;
   textZone: TextZone;
+  textBox?: TextBox;
   subline: string;
   brandLine: string;
   artistName: string;
