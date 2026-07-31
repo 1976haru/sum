@@ -22,6 +22,7 @@ export default function PreviewPanel({ aspect, onAspectChange, config, coverBase
   const [preview, setPreview] = useState('');
   const [busy, setBusy] = useState(false);
   const [fontWarning, setFontWarning] = useState('');
+  const [thumbWarnings, setThumbWarnings] = useState<string[]>([]);
   const imgRef = useRef<HTMLImageElement>(null);
 
   // 렌더 파이프라인(thumbnail.ts/cover.ts)도 내부적으로 같은 폰트 로드를 기다리지만,
@@ -35,16 +36,18 @@ export default function PreviewPanel({ aspect, onAspectChange, config, coverBase
     return () => { cancelled = true; };
   }, [config.fontStyle]);
 
+  // Phase 1-3: 배경 이미지가 없어도 폴백 그라디언트로 계속 렌더한다(더 이상 빈 화면으로 막지 않는다).
   useEffect(() => {
     let cancelled = false;
-    if (!image) { setPreview(''); return; }
     setBusy(true);
     const task = aspect === '16x9'
-      ? renderThumbnail({ ...config, imageDataUrl: image.dataUrl, width: 640, height: 360 })
-      : renderCover({ ...coverBase, headline: coverHeadline, imageDataUrl: image.dataUrl }, 640);
+      ? renderThumbnail({ ...config, imageDataUrl: image?.dataUrl, width: 640, height: 360 })
+        .then(result => { setThumbWarnings(result.diagnostics.warnings); return result.dataUrl; })
+      : renderCover({ ...coverBase, headline: coverHeadline, imageDataUrl: image?.dataUrl }, 640)
+        .then(dataUrl => { setThumbWarnings([]); return dataUrl; });
     void task
       .then(dataUrl => { if (!cancelled) setPreview(dataUrl); })
-      .catch(() => { if (!cancelled) setPreview(''); })
+      .catch(() => { if (!cancelled) { setPreview(''); setThumbWarnings([]); } })
       .finally(() => { if (!cancelled) setBusy(false); });
     return () => { cancelled = true; };
   }, [config, coverBase, coverHeadline, image, aspect]);
@@ -76,7 +79,11 @@ export default function PreviewPanel({ aspect, onAspectChange, config, coverBase
       {dragEditable && <TextBoxToolbar visible={Boolean(config.textBox)} onRevert={() => onTextBoxCommit({ textBox: undefined })} />}
       <label className="checkbox-row"><input type="checkbox" checked={mini} onChange={event => setMini(event.target.checked)} /> 168px 축소 미리보기</label>
       {busy && <p className="supporting">렌더링 중...</p>}
+      {!image && preview && <p className="supporting">배경 이미지 없음 — 단색 배경으로 생성 중</p>}
       {fontWarning && <p className="supporting font-warning"><TriangleAlert size={14} /> {fontWarning}</p>}
+      {thumbWarnings.map(warning => (
+        <p key={warning} className="supporting font-warning"><TriangleAlert size={14} /> {warning}</p>
+      ))}
     </aside>
   );
 }

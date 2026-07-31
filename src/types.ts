@@ -64,7 +64,8 @@ export interface ProjectConfig {
 }
 
 export interface ThumbnailRenderInput extends ProjectConfig {
-  imageDataUrl: string;
+  // 없으면(undefined) accent 색 기반 그라디언트로 대체한다(Phase 1-3 폴백 배경).
+  imageDataUrl?: string;
   width?: number;
   height?: number;
   variantIndex?: number;
@@ -87,7 +88,8 @@ export interface CoverConfig {
 }
 
 export interface CoverRenderInput extends CoverConfig {
-  imageDataUrl: string;
+  // 없으면(undefined) accent 색 기반 그라디언트로 대체한다(Phase 1-3 폴백 배경).
+  imageDataUrl?: string;
   variantIndex?: number;
 }
 
@@ -134,6 +136,8 @@ export interface BatchResultItem {
   path?: string;
   status: 'ok' | 'failed';
   reason?: string;
+  // renderThumbnail()의 진단 경고(168px 판독성/대비/말줄임). 경고는 생성을 막지 않는다.
+  warnings?: string[];
 }
 
 export interface BatchProgressState {

@@ -100,6 +100,7 @@ input[type="range"] { padding: 0; accent-color: #a87939; }
 .batch-row.fail { color: #a13d2b; border-color: #f0d3c8; background: #fff6f2; }
 .batch-name { font-weight: 700; }
 .batch-reason { color: #8c8274; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.batch-warning { color: #a3401f; white-space: normal; }
 .section-gap { margin-top: 22px; padding-top: 16px; border-top: 1px solid #e8dfd1; }
 
 /* --- 스튜디오 셸: 사이드바 + 4스텝 + 상시 미리보기 --- */

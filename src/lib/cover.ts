@@ -1,7 +1,8 @@
 import type { CoverConfig, CoverRenderInput, ProjectConfig } from '../types';
 import { ensureFontsLoaded, titleFont } from './fonts';
-import { decideReadability, sampleAverageLuminance } from './readability';
+import { decideReadabilityFromProfile, sampleLuminanceProfile, TARGET_CONTRAST } from './readability';
 import { clampVerticalSafeArea, layoutText, letterSpacingPx, makeCanvasMeasurer } from './textLayout';
+import { paintFallbackBackground } from './fallbackBackground';
 
 // DistroKid 등 음원 유통 규격: 3000x3000 정사각, 최소 1400x1400 권장, RGB JPG/PNG.
 export const COVER_SIZE = 3000;
@@ -54,8 +55,14 @@ export async function renderCover(input: CoverRenderInput, size = COVER_SIZE): P
   canvas.height = size;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas를 사용할 수 없습니다.');
-  const image = await loadImage(input.imageDataUrl);
-  coverFit(ctx, image, size, input.variantIndex || 0);
+
+  // Phase 1-3: 배경 이미지가 없으면 accent 색 기반 그라디언트로 대체한다.
+  if (input.imageDataUrl) {
+    const image = await loadImage(input.imageDataUrl);
+    coverFit(ctx, image, size, input.variantIndex || 0);
+  } else {
+    paintFallbackBackground(ctx, size, size, input.accent);
+  }
 
   const maxWidth = size * 0.76;
   const boxX = size / 2;
@@ -64,13 +71,6 @@ export async function renderCover(input: CoverRenderInput, size = COVER_SIZE): P
   const minFontSize = 96 * scale;
   const safeTop = size * 0.05;
   const safeBottom = size * 0.95;
-
-  const luminance = input.autoTextColor
-    ? sampleAverageLuminance(ctx, size * 0.12, size * 0.3, size * 0.76, size * 0.4)
-    : null;
-  const auto = luminance !== null ? decideReadability(luminance) : null;
-  const textColor = auto ? auto.textColor : input.textColor;
-  const scrimRGB = auto ? auto.scrimRGB : ([18, 14, 10] as [number, number, number]);
 
   // fillText 전에 폰트 로드를 기다린다(실패해도 throw하지 않고 시스템 폴백으로 그린다).
   await ensureFontsLoaded(input.fontStyle, startFontSize);
@@ -93,8 +93,22 @@ export async function renderCover(input: CoverRenderInput, size = COVER_SIZE): P
   const rawTop = centerY - blockHeight / 2;
   const startY = clampVerticalSafeArea(rawTop, blockHeight, size, 0.05);
 
-  // 반투명 스크림: 텍스트 블록 주변만 부드럽게 감싸 축소 미리보기에서도 읽히게 한다.
+  // Phase 1-3(범위 밖이지만 함께 고침): 고정 사각형(size*0.12~0.88, 0.3~0.7) 대신 레이아웃을
+  // 먼저 계산해 실제 텍스트 블록만 샘플링한다 — 썸네일과 동일한 analyzeLuminance 경로.
+  const sampleX0 = boxX - maxWidth / 2;
+  const profile = sampleLuminanceProfile(ctx, sampleX0, startY, maxWidth, Math.max(1, blockHeight));
+
+  let textColor = input.textColor;
+  let scrimRGB: [number, number, number] = [18, 14, 10];
   const alpha = Math.max(0.25, Math.min(0.9, input.overlayStrength));
+
+  if (input.autoTextColor) {
+    // 커버는 아직 168px 진단 대상이 아니라 alpha는 자동으로 올리지 않는다(사용자가 고른
+    // overlayStrength를 그대로 존중) — 색만 새 profile 기반 판정(p50)으로 정한다.
+    const auto = decideReadabilityFromProfile(profile, alpha, TARGET_CONTRAST, alpha);
+    textColor = auto.textColor;
+    scrimRGB = auto.scrimRGB;
+  }
   const [sr, sg, sb] = scrimRGB;
   const padY = 70 * scale;
   const gradient = ctx.createLinearGradient(0, startY - padY, 0, startY + blockHeight + padY);

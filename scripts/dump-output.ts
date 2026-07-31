@@ -13,6 +13,13 @@ import { buildReleaseMetadataText } from '../src/lib/releaseMeta';
 import { resolveTextBox } from '../src/lib/textBox';
 import { fontSpecFor, LEGACY_FONT_STYLE_MAP, normalizeFontStyleId } from '../src/lib/fonts';
 import { applyKinsoku, layoutText, letterSpacingPx, type MeasureFn } from '../src/lib/textLayout';
+import {
+  analyzeLuminance,
+  decideReadability,
+  decideReadabilityFromProfile,
+  READABLE_LIGHT_TEXT
+} from '../src/lib/readability';
+import { fallbackGradientStops } from '../src/lib/fallbackBackground';
 import type { FontStyleId, LayoutId, SeasonPresetId, TextZone, TimePresetId } from '../src/types';
 
 // 린터(promptBuilder.test.ts)와 동일한 어휘 목록. 이 스크립트는 판정하지 않으므로
@@ -168,6 +175,32 @@ for (const em of [0, 0.1, 0.2]) {
   });
   console.log(`\n--- letterSpacing=${em}em (letterSpacingPx@32px = ${letterSpacingPx(em, 32)}) ---`);
   layout.lines.forEach((line, i) => console.log(`  [${i}] "${line}"  (width=${measureWithSpacing(line, layout.fontSize).toFixed(1)})`));
+}
+
+section('10) 반반(검정+흰색) 배경 — 기존 로직 vs 새 로직');
+function solidRgba(r: number, g: number, b: number, count: number): number[] {
+  const data: number[] = [];
+  for (let i = 0; i < count; i++) data.push(r, g, b, 255);
+  return data;
+}
+const halfHalf = [...solidRgba(0, 0, 0, 500), ...solidRgba(255, 255, 255, 500)];
+const halfHalfProfile = analyzeLuminance(halfHalf);
+console.log(`LuminanceProfile: p10=${halfHalfProfile.p10.toFixed(3)} p50=${halfHalfProfile.p50.toFixed(3)} p90=${halfHalfProfile.p90.toFixed(3)} mean=${halfHalfProfile.mean.toFixed(3)}`);
+
+const legacyDecision = decideReadability(halfHalfProfile.mean);
+console.log(`\n[기존 로직] decideReadability(mean=${halfHalfProfile.mean.toFixed(3)}) → textColor=${legacyDecision.textColor} (평균만 보고 판단 — 흰 영역 위에 흰 글자가 놓일 수 있다는 사실을 모른다)`);
+
+for (const baseAlpha of [0.25, 0.5, 0.72]) {
+  const newDecision = decideReadabilityFromProfile(halfHalfProfile, baseAlpha);
+  console.log(`\n[새 로직] baseAlpha=${baseAlpha} → textColor=${newDecision.textColor}, scrimAlpha=${newDecision.scrimAlpha.toFixed(2)}(시작 ${baseAlpha} 대비 ${newDecision.scrimAlpha > baseAlpha ? '상향됨' : '변화 없음'}), 최종 대비비=${newDecision.contrastRatio.toFixed(2)}:1, 경고=${newDecision.contrastWarning}`);
+}
+console.log(`\n결론: mean 기반 색 선택 자체는 우연히 같은 흰 글자를 고르지만(${legacyDecision.textColor === READABLE_LIGHT_TEXT ? 'mean도 0.55 문턱 아래' : ''}),`);
+console.log('기존 로직은 대비를 전혀 검증하지 않고 overlayStrength를 그대로 쓰는 반면, 새 로직은 낮은 시작 알파에서 실제 대비가 부족함을 감지해 스크림을 끌어올린다.');
+
+section('11) 폴백 배경(accent 색 기반 그라디언트) 색상 미리보기');
+for (const accent of ['#b4833f', '#17304f', '#a13d2b']) {
+  const { top, bottom } = fallbackGradientStops(accent);
+  console.log(`  accent=${accent}  →  top=${top}  bottom=${bottom}`);
 }
 
 section('요약');
