@@ -87,12 +87,23 @@ describe('applyKinsoku', () => {
     expect(fixed.join('')).toBe(lines.join(''));
   });
 
-  it('3) 금칙 문자만으로 된 줄은 무한루프 없이 즉시 반환하고 그대로 둔다', () => {
-    const lines = ['abc', '、。', 'def'];
+  it('3) 금칙 문자만으로 된 줄은 무한루프 없이 즉시 반환한다 — 追い出し도 불가능하면 그대로 둔다', () => {
+    // 앞줄이 1글자('a')라 追い出し(밀어내기)도 시도하지 않는다(앞줄이 비어버리므로) —
+    // 끌어올리기(줄 전체 병합)도 시도하지 않으므로 결국 손댈 방법이 없어 그대로 남는다.
+    const lines = ['a', '、。', 'def'];
     const start = Date.now();
     const fixed = applyKinsoku(lines, 16, 1000, measure);
     expect(Date.now() - start).toBeLessThan(500);
-    expect(fixed[1]).toBe('、。'); // 줄 전체가 금칙 문자라 손대지 않는다
+    expect(fixed[1]).toBe('、。');
+    expect(fixed.join('')).toBe(lines.join(''));
+  });
+
+  it('3-1) 금칙 문자만으로 된 줄이라도 追い出し로 고칠 수 있으면 고친다', () => {
+    // '」' 한 글자짜리 줄은 끌어올리기(줄 전체 병합)는 시도하지 않지만, 앞줄 마지막
+    // 글자 하나를 내리는 追い出し는 가능하면 시도해 위반을 없앤다.
+    const lines = ['窓辺の「静かな朝', '」'];
+    const fixed = applyKinsoku(lines, 16, 1000, measure);
+    for (const line of fixed) expect(line.startsWith('」')).toBe(false);
     expect(fixed.join('')).toBe(lines.join(''));
   });
 
@@ -151,6 +162,55 @@ describe('applyKinsoku', () => {
     expect(withoutRule.lines.some(line => line.startsWith(','))).toBe(true); // 후처리를 껐으니 위반이 그대로 남는다
 
     expect(withRule.lines.join('').replace(/\s+/g, '')).toBe(withoutRule.lines.join('').replace(/\s+/g, ''));
+  });
+
+  it('追い出し(밀어내기): 끌어올리기가 폭 초과로 실패해도 앞줄 마지막 글자를 내려 위반을 해소한다', () => {
+    // 공백 없는 일본어를 강제 문자단위로 wrap하면 앞줄이 항상 maxWidth를 꽉 채운 상태라
+    // 끌어올리기(candidatePrev)는 정의상 거의 항상 실패한다 — 이게 밀어내기가 필요한 이유다.
+    // 8글자폭(=maxWidth 80, char당 10) 기준으로 실제 헤드라인 성격의 일본어 문구 20개를
+    // 강제 wrap한 뒤, 行頭禁則 미해결 건수가 0이어야 한다(고친 전에는 5/20이 남았다).
+    const phrases = [
+      'ふと、あの日を思い出す',
+      '窓辺の「静かな朝」',
+      'あの夏の日、忘れない',
+      '今日も一日、お疲れさま',
+      '静かな夜に、ひとり',
+      'もう一度、会いたくて',
+      '遠い記憶、ふと蘇る',
+      '小さな幸せ、見つけた',
+      '雨の日は、少し切ない',
+      '春が来た、桜舞う頃',
+      '星空の下、君を想う',
+      'あたたかい光、差し込む',
+      'ゆっくりと、時が流れる',
+      '懐かしい歌、口ずさむ',
+      '優しい風が、頬をなでる',
+      '夕暮れ時、影が伸びる',
+      '誰もいない、静かな部屋',
+      '遠く聞こえる、汽笛の音',
+      '少しずつ、前へ進もう',
+      'いつか見た、あの景色'
+    ];
+    const measure = syntheticMeasure(10);
+    const maxWidth = 80; // 8글자폭
+    const startsForbidden = new Set(Array.from('。、」』）？！?!：；:;っゃゅょぁぃぅぇぉゎッャュョァィゥェォヮ.,'));
+
+    let unresolved = 0;
+    for (const phrase of phrases) {
+      const layout = layoutText(phrase, {
+        measure,
+        maxWidth,
+        maxHeight: 5000,
+        startFontSize: 16,
+        minFontSize: 16,
+        maxLines: 20
+      });
+      const hasViolation = layout.lines.some((line, i) => i > 0 && line.length > 0 && startsForbidden.has(line[0]));
+      if (hasViolation) unresolved++;
+      for (const line of layout.lines) expect(measure(line, layout.fontSize)).toBeLessThanOrEqual(maxWidth + 1e-6);
+      expect(layout.lines.join('')).toBe(phrase); // 내용 보존(20개 다 3줄 이내로 truncate 없이 들어가는 길이)
+    }
+    expect(unresolved).toBe(0);
   });
 });
 

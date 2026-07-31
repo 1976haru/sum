@@ -95,10 +95,13 @@ const MAX_KINSOKU_ITERATIONS = 200;
 
 // wrapGreedy가 만든 줄을 건드리지 않고, 완성된 줄 배열만 후처리로 다듬는다.
 // - 다음 줄 첫머리가 금칙 문자로 시작하면 앞줄 끝으로 끌어올린다.
+// - 끌어올리기가 앞줄 폭 초과로 실패하면 追い出し(밀어내기)를 시도한다: 앞줄의 마지막
+//   글자를 현재 줄 앞으로 내려 금칙 문자를 줄 첫머리에서 밀어낸다.
 // - 이번 줄 끝이 금칙 문자로 끝나면 다음 줄 앞으로 내린다.
 // - 연속된 금칙 문자는 통째로 이동한다.
-// - 이동으로 인해 상대 줄이 maxWidth를 넘으면 그 이동은 하지 않는다(원상 복구).
-// - 줄 전체가 금칙 문자뿐이면 그 줄은 건드리지 않는다(무한루프 방지).
+// - 이동/밀어내기로 인해 상대 줄이 maxWidth를 넘으면 시도하지 않는다(원상 복구).
+// - 줄 전체가 금칙 문자뿐이면 끌어올리기(그 줄 전체를 앞줄에 병합)는 시도하지 않지만,
+//   追い出し는 시도한다(앞줄 마지막 한 글자만 내리는 것이라 전체 병합과 무관하다).
 export function applyKinsoku(lines: string[], fontSize: number, maxWidth: number, measure: MeasureFn): string[] {
   if (lines.length <= 1) return lines;
   const result = lines.slice();
@@ -112,16 +115,44 @@ export function applyKinsoku(lines: string[], fontSize: number, maxWidth: number
     for (let i = 1; i < result.length && iterations < MAX_KINSOKU_ITERATIONS; i++) {
       iterations++;
       const line = result[i];
-      if (!line) continue;
+      if (!line || !LINE_START_FORBIDDEN.has(line[0])) continue; // 위반 없음
+
       let cut = 0;
       while (cut < line.length && LINE_START_FORBIDDEN.has(line[cut])) cut++;
-      if (cut === 0 || cut === line.length) continue; // 없음, 또는 줄 전체가 금칙 문자
-      const moved = line.slice(0, cut);
-      const candidatePrev = result[i - 1] + moved;
-      if (measure(candidatePrev, fontSize) > maxWidth) continue; // 넘치면 이동하지 않는다
-      result[i - 1] = candidatePrev;
-      result[i] = line.slice(cut);
-      changed = true;
+
+      let fixed = false;
+      if (cut < line.length) {
+        // 줄 전체가 금칙 문자는 아니다 — 끌어올리기(앞줄로 당기기)를 시도한다.
+        const moved = line.slice(0, cut);
+        const candidatePrev = result[i - 1] + moved;
+        if (measure(candidatePrev, fontSize) <= maxWidth) {
+          result[i - 1] = candidatePrev;
+          result[i] = line.slice(cut);
+          fixed = true;
+        }
+      }
+
+      if (!fixed) {
+        // 끌어올리기를 시도하지 않았거나(줄 전체가 금칙 문자) 폭 초과로 실패했다.
+        // 追い出し(밀어내기): 앞줄의 마지막 글자를 현재 줄 앞으로 내려, 금칙 문자가
+        // 더 이상 줄 첫머리가 아니게 만든다. wrapGreedy가 문자 단위 강제 절단으로 만든
+        // 줄은 앞줄이 이미 maxWidth를 꽉 채운 경우가 많아 끌어올리기 자체가 폭 계산상
+        // 항상 실패하는데, 이 경우의 보완책이다.
+        const prevLine = result[i - 1];
+        if (prevLine.length > 1) { // 앞줄이 1글자면 시도하지 않는다
+          const pushedChar = prevLine[prevLine.length - 1];
+          if (!LINE_START_FORBIDDEN.has(pushedChar)) { // 내린 글자 자체가 금칙이면 위반이 남으므로 포기
+            const candidateNext = pushedChar + line;
+            if (measure(candidateNext, fontSize) <= maxWidth) { // 내린 결과가 넘치면 포기
+              result[i - 1] = prevLine.slice(0, -1);
+              result[i] = candidateNext;
+              fixed = true;
+            }
+          }
+        }
+      }
+
+      if (fixed) changed = true;
     }
 
     // 行末禁則: i번째 줄 끝의 금칙 문자열을 (i+1)번째 줄 앞으로 옮긴다.
