@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { RefreshCw, Sparkles } from 'lucide-react';
+import { AlertTriangle, RefreshCw, Sparkles } from 'lucide-react';
 import type { Language } from '../../types';
 import { HEADLINE_STYLE_LABELS, shortHeadlineSuggestions, styledHeadlineSuggestions } from '../../lib/headlines';
 
@@ -12,8 +12,14 @@ interface CaptionStepProps {
   onSublineChange: (value: string) => void;
   brandLine: string;
   onBrandLineChange: (value: string) => void;
-  coverHeadline: string;
-  onCoverHeadlineChange: (value: string) => void;
+  releaseTitle: string;
+  onReleaseTitleChange: (value: string) => void;
+  artistName: string;
+  onArtistNameChange: (value: string) => void;
+  coverHeadlineOverride: boolean;
+  onCoverHeadlineOverrideChange: (value: boolean) => void;
+  coverHeadlineOverrideValue: string;
+  onCoverHeadlineOverrideValueChange: (value: string) => void;
 }
 
 function countChars(text: string) {
@@ -23,7 +29,8 @@ function countChars(text: string) {
 export default function CaptionStep({
   language, onLanguageChange,
   headline, onHeadlineChange, subline, onSublineChange, brandLine, onBrandLineChange,
-  coverHeadline, onCoverHeadlineChange
+  releaseTitle, onReleaseTitleChange, artistName, onArtistNameChange,
+  coverHeadlineOverride, onCoverHeadlineOverrideChange, coverHeadlineOverrideValue, onCoverHeadlineOverrideValueChange
 }: CaptionStepProps) {
   const [seed, setSeed] = useState(0);
   const suggestions = useMemo(() => styledHeadlineSuggestions(language, seed), [language, seed]);
@@ -69,8 +76,23 @@ export default function CaptionStep({
       </div>
 
       <div className="suggestion-block">
-        <h3>커버(1:1) 전용 문구 — 썸네일과 독립</h3>
-        <label>커버 한 줄 문구<input value={coverHeadline} maxLength={24} onChange={event => onCoverHeadlineChange(event.target.value)} /></label>
+        <h3>릴리스 정보 — DistroKid 등록 메타데이터와 이어집니다</h3>
+        <p className="supporting">여기서 입력한 릴리스 제목·아티스트명이 커버(3000×3000) 인쇄 문구의 기본값이 됩니다. 커버에 인쇄된 문구와 등록 정보가 어긋나면 DistroKid 반려 사유가 됩니다.</p>
+        <label>릴리스 제목<input value={releaseTitle} maxLength={64} onChange={event => onReleaseTitleChange(event.target.value)} /></label>
+        <label>아티스트명<input value={artistName} onChange={event => onArtistNameChange(event.target.value)} placeholder="예: SUM Studio" /></label>
+
+        <label className="checkbox-row">
+          <input type="checkbox" checked={coverHeadlineOverride} onChange={event => onCoverHeadlineOverrideChange(event.target.checked)} />
+          커버 문구를 릴리스 제목과 다르게 쓰기
+        </label>
+        {coverHeadlineOverride ? (
+          <>
+            <label>커버(1:1) 전용 문구<input value={coverHeadlineOverrideValue} maxLength={24} onChange={event => onCoverHeadlineOverrideValueChange(event.target.value)} /></label>
+            <p className="length-hint warn"><AlertTriangle size={13} /> 커버 문구가 등록 제목과 다릅니다 — DistroKid 반려 위험</p>
+          </>
+        ) : (
+          <p className="supporting">커버 인쇄 문구: <b>{releaseTitle || '(릴리스 제목을 입력하세요)'}</b> (릴리스 제목과 동일)</p>
+        )}
       </div>
     </div>
   );

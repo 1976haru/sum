@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('sumAPI', {
   readImage: (filePath) => ipcRenderer.invoke('file:read-image', filePath),
   probeAudio: (filePath) => ipcRenderer.invoke('audio:probe', filePath),
   saveThumbnail: (input) => ipcRenderer.invoke('thumbnail:save', input),
+  saveTextFile: (input) => ipcRenderer.invoke('file:write-text', input),
   renderPlaylist: (input) => ipcRenderer.invoke('playlist:render', input),
   cancelRender: (jobId) => ipcRenderer.invoke('playlist:cancel', jobId),
   exportCapcutKit: (input) => ipcRenderer.invoke('capcut:export-kit', input),
@@ -17,6 +18,9 @@ contextBridge.exposeInMainWorld('sumAPI', {
   loadAISettings: () => ipcRenderer.invoke('settings:load-ai'),
   saveAISettings: (settings) => ipcRenderer.invoke('settings:save-ai', settings),
   generateAIBackground: (input) => ipcRenderer.invoke('ai:generate-background', input),
+  inspectBackground: (input) => ipcRenderer.invoke('ai:inspect-background', input),
+  pickChecklistXlsx: () => ipcRenderer.invoke('dialog:pick-xlsx'),
+  loadChecklistXlsx: (filePath) => ipcRenderer.invoke('checklist:load-xlsx', filePath),
   copyText: (text) => ipcRenderer.invoke('clipboard:write-text', text),
   onProgress: (callback) => {
     const listener = (_event, payload) => callback(payload);

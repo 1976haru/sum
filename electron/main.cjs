@@ -5,6 +5,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const archiver = require('archiver');
+const ExcelJS = require('exceljs');
 const ffmpegStatic = require('ffmpeg-static');
 const ffprobeStatic = require('ffprobe-static');
 
@@ -166,7 +167,21 @@ async function withRetry(fn, maxRetries = 2) {
   throw lastError;
 }
 
+// 파트C: 호출부의 provider 분기 로직이 바뀌어도 문구 금지 지시 없이 생성되는 일이 없도록,
+// 각 provider 함수가 자기 자신의 입력을 스스로 방어한다(호출부 신뢰 금지).
+function assertNegativePromptPresent(negativePrompt) {
+  if (!negativePrompt || !String(negativePrompt).includes('no text')) {
+    throw new Error('[안전장치] Qwen negative_prompt가 비어 있습니다. 생성을 중단합니다.');
+  }
+}
+function assertPromptForbidsText(prompt) {
+  if (!String(prompt || '').includes('no text')) {
+    throw new Error('[안전장치] Gemini 프롬프트에 문구 금지 지시가 없습니다. 생성을 중단합니다.');
+  }
+}
+
 async function generateQwenBackground(settings, prompt, negativePrompt, size) {
+  assertNegativePromptPresent(negativePrompt);
   if (!settings.qwenApiKey) throw new Error('Qwen API 키가 설정되어 있지 않습니다. 설정 화면에서 키를 입력하거나, 프롬프트 복사 폴백을 사용하세요.');
   if (!settings.qwenWorkspaceId) throw new Error('Qwen 워크스페이스 ID가 설정되어 있지 않습니다.');
 
@@ -200,6 +215,7 @@ async function generateQwenBackground(settings, prompt, negativePrompt, size) {
 
 // Gemini(generateContent + responseModalities:IMAGE, imageConfig.aspectRatio) — 2026-07 공식 문서 기준.
 async function generateGeminiBackground(settings, prompt, aspect) {
+  assertPromptForbidsText(prompt);
   if (!settings.geminiApiKey) throw new Error('Gemini API 키가 설정되어 있지 않습니다. 설정 화면에서 키를 입력하거나, 프롬프트 복사 폴백을 사용하세요.');
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${settings.geminiModel}:generateContent`;
@@ -218,7 +234,10 @@ async function generateGeminiBackground(settings, prompt, aspect) {
   }, 60000);
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(`Gemini 이미지 생성 실패 (HTTP ${response.status}): ${text.slice(0, 300) || '응답 없음'}`);
+    const modelHint = response.status === 404 || response.status === 400
+      ? ` 모델 ID(${settings.geminiModel})가 유효하지 않을 수 있습니다. 설정 화면에서 확인하세요.`
+      : '';
+    throw new Error(`Gemini 이미지 생성 실패 (HTTP ${response.status}): ${text.slice(0, 300) || '응답 없음'}${modelHint}`);
   }
   const json = await response.json();
   const parts = json && json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts;
@@ -226,6 +245,67 @@ async function generateGeminiBackground(settings, prompt, aspect) {
   if (!imagePart) throw new Error('Gemini 응답에서 이미지 데이터를 찾지 못했습니다.');
   const mime = imagePart.inlineData.mimeType || 'image/png';
   return `data:${mime};base64,${imagePart.inlineData.data}`;
+}
+
+// 파트F: Gemini는 배경 생성기가 아니라 검수기로만 쓴다(생성=Qwen 기본, 검수=Gemini).
+// JSON 파싱 실패는 재시도하지 않고 즉시 "검수 불가"로 반환한다. 네트워크 실패만 withRetry(2)를 탄다.
+function extractJsonBlock(text) {
+  const match = /\{[\s\S]*\}/.exec(String(text || ''));
+  if (!match) throw new Error('응답에서 JSON을 찾지 못했습니다.');
+  return match[0];
+}
+
+async function inspectGeminiBackground({ dataUrl, textZone }) {
+  const settings = readAISettings();
+  if (!settings.geminiApiKey) return { skipped: true, reason: '검수 건너뜀(키 없음)' };
+
+  const { mime, buffer } = dataUrlBuffer(dataUrl);
+  const prompt = [
+    '이미지를 검사해 JSON만 출력한다. 다른 텍스트는 출력하지 않는다.',
+    `지정된 텍스트존: ${textZone || 'center'}`,
+    '{"hasText": boolean, "hasVisibleFace": boolean, "textZoneClear": boolean, "objectCount": number, "notes": string}'
+  ].join('\n');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${settings.geminiModel}:generateContent`;
+  const body = {
+    contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mime, data: buffer.toString('base64') } }] }],
+    generationConfig: { responseModalities: ['TEXT'] }
+  };
+
+  let json;
+  try {
+    json = await withRetry(async () => {
+      const response = await fetchWithTimeout(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': settings.geminiApiKey },
+        body: JSON.stringify(body)
+      }, 60000);
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(`Gemini 검수 실패 (HTTP ${response.status}): ${text.slice(0, 300) || '응답 없음'}`);
+      }
+      return response.json();
+    }, 2);
+  } catch (error) {
+    return { failed: true, reason: error.message };
+  }
+
+  const parts = json && json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts;
+  const textPart = Array.isArray(parts) ? parts.find(part => typeof part.text === 'string') : null;
+  if (!textPart) return { failed: true, reason: 'Gemini 응답에서 텍스트를 찾지 못했습니다.' };
+
+  try {
+    const parsed = JSON.parse(extractJsonBlock(textPart.text));
+    return {
+      hasText: Boolean(parsed.hasText),
+      hasVisibleFace: Boolean(parsed.hasVisibleFace),
+      textZoneClear: Boolean(parsed.textZoneClear),
+      objectCount: Number(parsed.objectCount) || 0,
+      notes: String(parsed.notes || '')
+    };
+  } catch {
+    // 파트G: JSON 파싱 실패는 재시도하지 않는다. 단발성으로 "검수 불가"만 반환한다.
+    return { failed: true, reason: '검수 응답 JSON 파싱에 실패했습니다.' };
+  }
 }
 
 async function generateAIBackground({ prompt, negativePrompt, size, aspect }) {
@@ -236,6 +316,81 @@ async function generateAIBackground({ prompt, negativePrompt, size, aspect }) {
       : generateQwenBackground(settings, prompt, negativePrompt, size)
   ), 2);
 }
+// --- 파트D: 곡세트 체크리스트 xlsx 임포터(읽기 전용). 시트 구조가 다르면 추측하지 않고 에러를 던진다. ---
+const CHECKLIST_SHEET_NAMES = ['한국채널', '일본채널'];
+const CHECKLIST_HEADER_ROW = 7;
+const CHECKLIST_DATA_START_ROW = 8;
+const MAX_SHEET_ROWS = 500; // 파트G: 어떤 대용량 반복도 이 상한을 넘기지 않는다.
+const CHECKLIST_EXPECTED_HEADERS = {
+  A: '번호', B: '공개목표', C: '시즌', D: '곡세트/영상기획', E: '핵심청자·상황',
+  K: '썸네일/배경 방향', L: '유튜브 제목 예시', M: '핵심 키워드', R: '썸네일'
+};
+
+// 수식 셀은 {formula, result} 형태로 들어올 수 있다. 계산된 결과값만 쓰고 수식 문자열은 무시한다.
+function cellText(cell) {
+  const value = cell && cell.value;
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'object') {
+    if (Array.isArray(value.richText)) return value.richText.map(part => part.text || '').join('').trim();
+    if (Object.prototype.hasOwnProperty.call(value, 'result')) return String(value.result ?? '').trim();
+    if (value instanceof Date) return value.toISOString();
+    if (Object.prototype.hasOwnProperty.call(value, 'text')) return String(value.text).trim();
+    return '';
+  }
+  return String(value).trim();
+}
+
+function validateChecklistHeaders(worksheet, sheetName) {
+  const headerRow = worksheet.getRow(CHECKLIST_HEADER_ROW);
+  const mismatches = [];
+  for (const [col, expected] of Object.entries(CHECKLIST_EXPECTED_HEADERS)) {
+    const actual = cellText(headerRow.getCell(col));
+    if (actual !== expected) mismatches.push(`${col}열: 기대 "${expected}" / 실제 "${actual || '(비어있음)'}"`);
+  }
+  if (mismatches.length) {
+    throw new Error(`[체크리스트] "${sheetName}" 시트의 ${CHECKLIST_HEADER_ROW}행이 예상된 헤더와 다릅니다. 추측해서 진행하지 않고 중단합니다.\n${mismatches.join('\n')}`);
+  }
+}
+
+function parseChecklistSheet(worksheet, sheetName) {
+  validateChecklistHeaders(worksheet, sheetName);
+  const rows = [];
+  const hardLimit = CHECKLIST_DATA_START_ROW + MAX_SHEET_ROWS - 1;
+  const lastRow = Math.min(worksheet.rowCount, hardLimit);
+  for (let r = CHECKLIST_DATA_START_ROW; r <= lastRow; r++) {
+    const row = worksheet.getRow(r);
+    const rawNumber = cellText(row.getCell('A'));
+    if (!rawNumber) continue; // 번호가 없는 행은 세트 목록 끝으로 간주하고 건너뛴다.
+    const numeric = parseInt(rawNumber, 10);
+    const setNumber = String(Number.isFinite(numeric) ? numeric : rawNumber).padStart(2, '0');
+    rows.push({
+      setNumber,
+      releaseTarget: cellText(row.getCell('B')),
+      season: cellText(row.getCell('C')),
+      projectName: cellText(row.getCell('D')),
+      moodHint: cellText(row.getCell('E')),
+      backgroundDirection: cellText(row.getCell('K')),
+      titleExample: cellText(row.getCell('L')),
+      keywords: cellText(row.getCell('M')),
+      thumbnailStatus: cellText(row.getCell('R'))
+    });
+  }
+  if (worksheet.rowCount > hardLimit) log(`[체크리스트] "${sheetName}": ${MAX_SHEET_ROWS}행 상한을 넘어 이후 행은 건너뛰었습니다.`);
+  return rows;
+}
+
+async function parseChecklistXlsx(filePath) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(filePath);
+  const sheets = {};
+  for (const sheetName of CHECKLIST_SHEET_NAMES) {
+    const worksheet = workbook.getWorksheet(sheetName);
+    if (!worksheet) throw new Error(`[체크리스트] 시트 "${sheetName}"를 찾을 수 없습니다. 파일 구조를 확인하세요.`);
+    sheets[sheetName] = parseChecklistSheet(worksheet, sheetName);
+  }
+  return sheets;
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -296,6 +451,14 @@ ipcMain.handle('thumbnail:save', async (_event, input) => {
   fs.writeFileSync(dest, buffer);
   return dest;
 });
+ipcMain.handle('file:write-text', (_event, input) => {
+  const outputDir = input.outputDir || app.getPath('downloads');
+  const fileName = safeName(input.fileName, 'metadata');
+  const dest = path.join(outputDir, `${fileName}.txt`);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.writeFileSync(dest, String(input.content || ''), 'utf-8');
+  return dest;
+});
 ipcMain.handle('shell:open-path', (_event, targetPath) => shell.openPath(targetPath));
 ipcMain.handle('brand:load-templates', () => readBrandTemplates());
 ipcMain.handle('brand:save-template', (_event, template) => {
@@ -327,6 +490,15 @@ ipcMain.handle('settings:save-ai', (_event, settings) => {
   return { ok: true };
 });
 ipcMain.handle('ai:generate-background', (_event, input) => generateAIBackground(input));
+ipcMain.handle('ai:inspect-background', (_event, input) => inspectGeminiBackground(input));
+ipcMain.handle('dialog:pick-xlsx', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '곡세트 체크리스트(xlsx) 선택', properties: ['openFile'],
+    filters: [{ name: 'Excel', extensions: ['xlsx'] }]
+  });
+  return result.canceled ? null : result.filePaths[0];
+});
+ipcMain.handle('checklist:load-xlsx', (_event, filePath) => parseChecklistXlsx(filePath));
 ipcMain.handle('clipboard:write-text', (_event, text) => { clipboard.writeText(String(text || '')); return true; });
 ipcMain.handle('playlist:cancel', (_event, jobId) => {
   const child = activeJobs.get(jobId);

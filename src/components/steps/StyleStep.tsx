@@ -5,11 +5,13 @@ import type { ChannelBrandTemplate, FontStyleId, ProjectConfig, TextZone } from 
 interface StyleStepProps {
   config: ProjectConfig;
   onConfigChange: (patch: Partial<ProjectConfig>) => void;
+  artistName: string;
+  onArtistNameChange: (value: string) => void;
 }
 
 const TEXT_ZONE_LABELS: Record<TextZone, string> = { 'left-third': '좌측 1/3', 'top-center': '상단 중앙', center: '중앙' };
 
-function templateFromConfig(config: ProjectConfig): ChannelBrandTemplate {
+function templateFromConfig(config: ProjectConfig, artistName: string): ChannelBrandTemplate {
   return {
     channelPreset: config.channelPreset,
     fontStyle: config.fontStyle,
@@ -20,6 +22,7 @@ function templateFromConfig(config: ProjectConfig): ChannelBrandTemplate {
     textZone: config.textZone,
     subline: config.subline,
     brandLine: config.brandLine,
+    artistName,
     showBadge: config.showBadge,
     showDivider: config.showDivider,
     showSubline: config.showSubline,
@@ -28,7 +31,7 @@ function templateFromConfig(config: ProjectConfig): ChannelBrandTemplate {
 }
 
 // 스텝③ 스타일 조정 + 채널 브랜드 템플릿 저장. 저장하지 않고 값만 바꾸면 "이번만 다르게" 1회 오버라이드가 된다.
-export default function StyleStep({ config, onConfigChange }: StyleStepProps) {
+export default function StyleStep({ config, onConfigChange, artistName, onArtistNameChange }: StyleStepProps) {
   const [templates, setTemplates] = useState<ChannelBrandTemplate[]>([]);
   const [status, setStatus] = useState('');
 
@@ -49,11 +52,12 @@ export default function StyleStep({ config, onConfigChange }: StyleStepProps) {
       showDivider: template.showDivider,
       showSubline: template.showSubline
     });
+    if (template.artistName) onArtistNameChange(template.artistName);
     setStatus(`"${template.channelPreset}" 템플릿을 불러왔습니다.`);
   }
 
   async function saveTemplate() {
-    const list = await window.sumAPI.saveBrandTemplate(templateFromConfig(config));
+    const list = await window.sumAPI.saveBrandTemplate(templateFromConfig(config, artistName));
     setTemplates(list);
     setStatus('현재 설정을 채널 템플릿으로 저장했습니다. 앱을 다시 실행해도 유지됩니다.');
   }

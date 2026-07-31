@@ -67,6 +67,7 @@ export default function SettingsScreen({ onBack, onSaved }: SettingsScreenProps)
       <label>모델<select value={settings.geminiModel} onChange={event => setSettings(current => ({ ...current, geminiModel: event.target.value }))}>
         {GEMINI_MODELS.map(model => <option key={model} value={model}>{model}</option>)}
       </select></label>
+      <p className="supporting">권장 모델 ID: {GEMINI_MODELS[0]} (2026-07 기준 공식 문서 확인, -preview 접미사 없는 정식 ID)</p>
 
       <div className="action-row">
         <button className="primary" onClick={() => void save()}><KeyRound size={16} /> 저장</button>

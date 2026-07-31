@@ -41,13 +41,19 @@ export default function App() {
   const [view, setView] = useState<View>('studio');
   const [config, setConfig] = useState<ProjectConfig>(DEFAULT_CONFIG);
   const [images, setImages] = useState<BackgroundImage[]>([]);
-  const [coverHeadline, setCoverHeadline] = useState('그날, 로마에서');
+  // 파트E: 커버 문구는 releaseTitle 파생값이 기본이다. 분리 편집은 명시적으로 체크해야만 가능하다.
+  const [releaseTitle, setReleaseTitle] = useState('그날, 로마에서');
+  const [artistName, setArtistName] = useState('');
+  const [coverHeadlineOverride, setCoverHeadlineOverride] = useState(false);
+  const [coverHeadlineOverrideValue, setCoverHeadlineOverrideValue] = useState('');
+  const coverHeadline = coverHeadlineOverride ? coverHeadlineOverrideValue : releaseTitle;
   const [outputDir, setOutputDir] = useState('');
   const [thumbnailPath, setThumbnailPath] = useState('');
   const [expandedStep, setExpandedStep] = useState(0);
   const [exported, setExported] = useState(false);
   const [aiSettings, setAiSettings] = useState<(AIImageSettings & { hasQwenKey?: boolean; hasGeminiKey?: boolean }) | null>(null);
   const [aspect, setAspect] = useState<AspectKind>('16x9');
+  const [backgroundExtra, setBackgroundExtra] = useState('');
 
   const channelLabel = useMemo(() => {
     if (config.channelPreset === 'morning-showa-cafe') return '아침의쇼와카페';
@@ -97,6 +103,7 @@ export default function App() {
         showDivider: match.showDivider,
         showSubline: match.showSubline
       }));
+      if (match.artistName) setArtistName(match.artistName);
     });
     return () => { cancelled = true; };
   }, [config.channelPreset]);
@@ -142,7 +149,7 @@ export default function App() {
 
           <div className="studio-steps">
             <StepShell index={1} title="배경 이미지" subtitle="내 사진 · AI 생성 · 프롬프트 복사" complete={stepComplete[0]} expanded={expandedStep === 0} onToggle={() => setExpandedStep(current => current === 0 ? -1 : 0)}>
-              <BackgroundStep images={images} onImagesChange={setImages} textZone={config.textZone} aspect={aspect} />
+              <BackgroundStep images={images} onImagesChange={setImages} textZone={config.textZone} aspect={aspect} extra={backgroundExtra} onExtraChange={setBackgroundExtra} />
             </StepShell>
 
             <StepShell index={2} title="문구" subtitle="메인 제목 · 부제 · 커버 문구" complete={stepComplete[1]} expanded={expandedStep === 1} onToggle={() => setExpandedStep(current => current === 1 ? -1 : 1)}>
@@ -155,17 +162,41 @@ export default function App() {
                 onSublineChange={subline => patchConfig({ subline })}
                 brandLine={config.brandLine}
                 onBrandLineChange={brandLine => patchConfig({ brandLine })}
-                coverHeadline={coverHeadline}
-                onCoverHeadlineChange={setCoverHeadline}
+                releaseTitle={releaseTitle}
+                onReleaseTitleChange={setReleaseTitle}
+                artistName={artistName}
+                onArtistNameChange={setArtistName}
+                coverHeadlineOverride={coverHeadlineOverride}
+                onCoverHeadlineOverrideChange={override => {
+                  setCoverHeadlineOverride(override);
+                  if (override) setCoverHeadlineOverrideValue(current => current || releaseTitle);
+                }}
+                coverHeadlineOverrideValue={coverHeadlineOverrideValue}
+                onCoverHeadlineOverrideValueChange={setCoverHeadlineOverrideValue}
               />
             </StepShell>
 
             <StepShell index={3} title="스타일 조정" subtitle="채널 브랜드 템플릿" complete={stepComplete[2]} expanded={expandedStep === 2} onToggle={() => setExpandedStep(current => current === 2 ? -1 : 2)}>
-              <StyleStep config={config} onConfigChange={patchConfig} />
+              <StyleStep config={config} onConfigChange={patchConfig} artistName={artistName} onArtistNameChange={setArtistName} />
             </StepShell>
 
             <StepShell index={4} title="내보내기" subtitle="단일 저장 · 세트 일괄 생성" complete={stepComplete[3]} expanded={expandedStep === 3} onToggle={() => setExpandedStep(current => current === 3 ? -1 : 3)}>
-              <ExportStep config={config} coverBase={coverBase} coverHeadline={coverHeadline} images={images} outputDir={outputDir} onOutputDirChange={setOutputDir} channelLabel={channelLabel} onExported={() => setExported(true)} />
+              <ExportStep
+                config={config}
+                coverBase={coverBase}
+                coverHeadline={coverHeadline}
+                releaseTitle={releaseTitle}
+                artistName={artistName}
+                images={images}
+                outputDir={outputDir}
+                onOutputDirChange={setOutputDir}
+                channelLabel={channelLabel}
+                onExported={() => setExported(true)}
+                onApplyChecklistSet={patch => {
+                  patchConfig({ projectName: patch.projectName, season: patch.season });
+                  setBackgroundExtra(patch.backgroundExtra);
+                }}
+              />
             </StepShell>
           </div>
 

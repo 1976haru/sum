@@ -82,6 +82,7 @@ export interface ChannelBrandTemplate {
   textZone: TextZone;
   subline: string;
   brandLine: string;
+  artistName: string;
   showBadge: boolean;
   showDivider: boolean;
   showSubline: boolean;
@@ -133,6 +134,36 @@ export interface RenderRequest {
   outputDir: string;
   outputName: string;
   motion: MotionMode;
+}
+
+export type ChecklistSheetName = '한국채널' | '일본채널';
+
+export interface ChecklistSetRow {
+  setNumber: string;
+  releaseTarget: string;
+  season: string;
+  projectName: string;
+  moodHint: string;
+  backgroundDirection: string;
+  titleExample: string;
+  keywords: string;
+  thumbnailStatus: string;
+}
+
+export type ChecklistSheets = Record<ChecklistSheetName, ChecklistSetRow[]>;
+
+export interface ReleaseMeta {
+  releaseTitle: string;
+  artistName: string;
+  channelPreset: ChannelPresetId;
+}
+
+export interface BackgroundInspection {
+  hasText: boolean;
+  hasVisibleFace: boolean;
+  textZoneClear: boolean;
+  objectCount: number;
+  notes: string;
 }
 
 export interface CapcutKitRequest {

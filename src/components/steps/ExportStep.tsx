@@ -1,34 +1,45 @@
 import { useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Download, FolderOpen, PlayCircle, StopCircle } from 'lucide-react';
-import type { BackgroundImage, BatchProgressState, BatchResultItem, CoverConfig, ProjectConfig } from '../../types';
+import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, FolderOpen, PlayCircle, StopCircle } from 'lucide-react';
+import type { BackgroundImage, BatchProgressState, BatchResultItem, ChecklistSetRow, ChecklistSheetName, ChecklistSheets, CoverConfig, ProjectConfig } from '../../types';
 import { renderThumbnail } from '../../lib/thumbnail';
 import { COVER_SIZE, renderCover } from '../../lib/cover';
+import { buildReleaseMetadataText } from '../../lib/releaseMeta';
 
 interface ExportStepProps {
   config: ProjectConfig;
   coverBase: CoverConfig;
   coverHeadline: string;
+  releaseTitle: string;
+  artistName: string;
   images: BackgroundImage[];
   outputDir: string;
   onOutputDirChange: (value: string) => void;
   channelLabel: string;
   onExported: () => void;
+  onApplyChecklistSet: (patch: { projectName: string; season: string; backgroundExtra: string }) => void;
 }
 
 // 어떤 대용량 반복도 이 상한을 넘기지 않는다: 못 맞춰도 경고 후 남은 항목은 건너뛰고 반환한다(파트G).
 const MAX_BATCH_ITEMS = 200;
 
+const CHECKLIST_CHANNEL_LABEL: Record<ChecklistSheetName, string> = { '한국채널': '굿모닝추억라디오', '일본채널': '아침의쇼와카페' };
+
 function slug(value: string): string {
   return value.trim().replace(/\s+/g, '') || 'Channel';
 }
 
-export default function ExportStep({ config, coverBase, coverHeadline, images, outputDir, onOutputDirChange, channelLabel, onExported }: ExportStepProps) {
+export default function ExportStep({ config, coverBase, coverHeadline, releaseTitle, artistName, images, outputDir, onOutputDirChange, channelLabel, onExported, onApplyChecklistSet }: ExportStepProps) {
   const [busySingle, setBusySingle] = useState(false);
   const [singleMessage, setSingleMessage] = useState('');
 
   const [captionsText, setCaptionsText] = useState('');
   const [channelCode, setChannelCode] = useState(() => slug(channelLabel));
   const [setNumber, setSetNumber] = useState('01');
+  const [checklistSheets, setChecklistSheets] = useState<ChecklistSheets | null>(null);
+  const [checklistSheetName, setChecklistSheetName] = useState<ChecklistSheetName>('한국채널');
+  const [checklistBusy, setChecklistBusy] = useState(false);
+  const [checklistMessage, setChecklistMessage] = useState('');
+  const [appliedSetNumber, setAppliedSetNumber] = useState<string | null>(null);
   const [includeWide, setIncludeWide] = useState(true);
   const [includeSquare, setIncludeSquare] = useState(false);
   const [busyBatch, setBusyBatch] = useState(false);
@@ -49,6 +60,37 @@ export default function ExportStep({ config, coverBase, coverHeadline, images, o
     return picked || '';
   }
 
+  async function loadChecklist() {
+    setChecklistBusy(true);
+    setChecklistMessage('');
+    try {
+      const filePath = await window.sumAPI.pickChecklistXlsx();
+      if (!filePath) return;
+      const sheets = await window.sumAPI.loadChecklistXlsx(filePath);
+      setChecklistSheets(sheets);
+      setAppliedSetNumber(null);
+      setChecklistMessage(`불러왔습니다: 한국채널 ${sheets['한국채널'].length}세트 · 일본채널 ${sheets['일본채널'].length}세트.`);
+    } catch (error) {
+      setChecklistSheets(null);
+      setChecklistMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setChecklistBusy(false);
+    }
+  }
+
+  function applyChecklistSet(row: ChecklistSetRow) {
+    const candidateLines = [
+      row.titleExample,
+      ...row.keywords.split(/[,·/]+/).map(part => part.trim()).filter(Boolean)
+    ].filter(Boolean);
+    setCaptionsText(candidateLines.join('\n'));
+    setChannelCode(slug(CHECKLIST_CHANNEL_LABEL[checklistSheetName]));
+    setSetNumber(row.setNumber);
+    setAppliedSetNumber(row.setNumber);
+    onApplyChecklistSet({ projectName: row.projectName, season: row.season, backgroundExtra: row.backgroundDirection });
+    setChecklistMessage(`${checklistSheetName} Set${row.setNumber}(${row.projectName})을(를) 적용했습니다. 문구는 편집 가능합니다.`);
+  }
+
   async function saveSingle(kind: 'thumbnail' | 'cover' | 'both') {
     if (!image) return alert('배경 이미지를 먼저 선택하세요.');
     const dir = await ensureOutputDir();
@@ -63,6 +105,9 @@ export default function ExportStep({ config, coverBase, coverHeadline, images, o
       if (kind === 'cover' || kind === 'both') {
         const dataUrl = await renderCover({ ...coverBase, headline: coverHeadline, imageDataUrl: image.dataUrl }, COVER_SIZE);
         await window.sumAPI.saveThumbnail({ dataUrl, outputDir: dir, fileName: `${config.projectName}_cover`, format: coverBase.format });
+        // 파트E: 커버와 같은 폴더에 등록 메타데이터를 동봉해, 인쇄 문구와 DistroKid 등록 정보가 어긋나지 않게 한다.
+        const metadataText = buildReleaseMetadataText({ releaseTitle, artistName, coverHeadline });
+        await window.sumAPI.saveTextFile({ outputDir: dir, fileName: `${releaseTitle || config.projectName}_metadata`, content: metadataText });
       }
       setSingleMessage('저장을 완료했습니다.');
       onExported();
@@ -154,6 +199,36 @@ export default function ExportStep({ config, coverBase, coverHeadline, images, o
       </div>
       {singleMessage && <p className="supporting">{singleMessage}</p>}
       {outputDir && <button className="path-button" onClick={() => void window.sumAPI.openPath(outputDir)}><FolderOpen size={14} /> 저장 폴더: {outputDir}</button>}
+
+      <h3 className="section-gap">곡세트 체크리스트에서 불러오기</h3>
+      <p className="supporting">시니어 플레이리스트 채널 곡세트 체크리스트(xlsx)에서 세트 하나를 선택하면 프로젝트명·시즌·배경 방향·문구 후보가 자동으로 채워집니다(읽기 전용, 원본 파일은 수정하지 않습니다).</p>
+      <div className="action-row">
+        <button className="secondary" disabled={checklistBusy} onClick={() => void loadChecklist()}><FileSpreadsheet size={16} /> {checklistBusy ? '불러오는 중...' : '체크리스트 불러오기(xlsx)'}</button>
+      </div>
+      {checklistSheets && (
+        <>
+          <div className="tab-strip small">
+            {(Object.keys(CHECKLIST_CHANNEL_LABEL) as ChecklistSheetName[]).map(name => (
+              <button key={name} className={checklistSheetName === name ? 'active' : ''} onClick={() => setChecklistSheetName(name)}>{name}({checklistSheets[name].length})</button>
+            ))}
+          </div>
+          <div className="checklist-set-list">
+            {checklistSheets[checklistSheetName].map(row => (
+              <button
+                key={row.setNumber}
+                className={appliedSetNumber === row.setNumber ? 'checklist-set-row active' : 'checklist-set-row'}
+                onClick={() => applyChecklistSet(row)}
+              >
+                <span className="checklist-set-num">Set{row.setNumber}</span>
+                <span className="checklist-set-name">{row.projectName || '(제목 없음)'}</span>
+                <span className="checklist-set-meta">{row.releaseTarget}{row.thumbnailStatus ? ` · ${row.thumbnailStatus}` : ''}</span>
+              </button>
+            ))}
+            {!checklistSheets[checklistSheetName].length && <p className="empty-note">이 시트에는 세트가 없습니다.</p>}
+          </div>
+        </>
+      )}
+      {checklistMessage && <p className="supporting step-message">{checklistMessage}</p>}
 
       <h3 className="section-gap">세트 일괄 생성</h3>
       <p className="supporting">현재 배경 목록({images.length}장) × 아래 문구 목록({captions.length}개)의 모든 조합({combinationCount}개)을 렌더링합니다.</p>
