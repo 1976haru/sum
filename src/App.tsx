@@ -97,6 +97,7 @@ export default function App() {
         overlayStrength: match.overlayStrength,
         autoTextColor: match.autoTextColor,
         textZone: match.textZone,
+        textBox: match.textBox,
         subline: match.subline,
         brandLine: match.brandLine,
         showBadge: match.showBadge,
