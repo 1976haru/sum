@@ -6,7 +6,9 @@ export type LayoutId = 'editorial' | 'story' | 'minimal';
 export type MotionMode = 'still' | 'gentle';
 export type AspectKind = '16x9' | '1x1';
 export type CoverLayoutId = 'centered' | 'centered-panel';
-export type FontStyleId = 'serif-thin' | 'serif-bold' | 'gothic';
+// 구 id('gothic')는 저장된 브랜드 템플릿에 남아있을 수 있어 fonts.ts의
+// normalizeFontStyleId()가 로드 시점에 신 id로 변환한다. 렌더러는 이 5종만 다룬다.
+export type FontStyleId = 'serif-thin' | 'serif-regular' | 'serif-bold' | 'gothic-regular' | 'gothic-bold';
 export type HeadlineStyleTag = 'curiosity' | 'question' | 'emotional' | 'empathy' | 'anticipation';
 
 export interface PickedFile {
@@ -50,6 +52,10 @@ export interface ProjectConfig {
   textColor: string;
   overlayStrength: number;
   fontStyle: FontStyleId;
+  // em 단위 자간. 기본 0(자간 없음), 범위 -0.05 ~ 0.3. 부제는 독립 설정이 없고 이 값을 함께 따른다.
+  letterSpacing?: number;
+  // 줄 간격 배수. 기본 1.28(textLayout.ts 기본값과 동일).
+  lineHeightRatio?: number;
   autoTextColor: boolean;
   brandLine: string;
   showBadge: boolean;
@@ -71,6 +77,8 @@ export interface CoverConfig {
   textColor: string;
   overlayStrength: number;
   fontStyle: FontStyleId;
+  letterSpacing?: number;
+  lineHeightRatio?: number;
   autoTextColor: boolean;
   brandLine: string;
   showBadge: boolean;
@@ -86,6 +94,8 @@ export interface CoverRenderInput extends CoverConfig {
 export interface ChannelBrandTemplate {
   channelPreset: ChannelPresetId;
   fontStyle: FontStyleId;
+  letterSpacing?: number;
+  lineHeightRatio?: number;
   textColor: string;
   accent: string;
   overlayStrength: number;

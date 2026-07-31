@@ -166,6 +166,8 @@ input[type="range"] { padding: 0; accent-color: #a87939; }
 .textbox-toolbar-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .textbox-custom-badge { display: inline-block; font-size: 10px; font-weight: 800; color: #8a6b3a; background: #f1ece0; padding: 3px 8px; border-radius: 999px; }
 
+.font-warning { display: flex; align-items: center; gap: 6px; color: #a3401f; }
+
 .tab-strip { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
 .tab-strip button { padding: 8px 12px; border: 1px solid #ddd0bc; border-radius: 999px; background: #fffdf8; color: #5b4b35; font-size: 12px; font-weight: 700; }
 .tab-strip button.active { background: #17304f; border-color: #17304f; color: #fff; }

@@ -11,7 +11,9 @@ import {
 } from '../src/lib/promptBuilder';
 import { buildReleaseMetadataText } from '../src/lib/releaseMeta';
 import { resolveTextBox } from '../src/lib/textBox';
-import type { LayoutId, SeasonPresetId, TextZone, TimePresetId } from '../src/types';
+import { fontSpecFor, LEGACY_FONT_STYLE_MAP, normalizeFontStyleId } from '../src/lib/fonts';
+import { applyKinsoku, layoutText, letterSpacingPx, type MeasureFn } from '../src/lib/textLayout';
+import type { FontStyleId, LayoutId, SeasonPresetId, TextZone, TimePresetId } from '../src/types';
 
 // 린터(promptBuilder.test.ts)와 동일한 어휘 목록. 이 스크립트는 판정하지 않으므로
 // 여기서의 카운트는 참고용 요약일 뿐, 통과/실패 기준은 테스트 쪽에 있다.
@@ -105,6 +107,67 @@ console.log('\nleft-third는 layout에 따라 boxY가 세 갈래다(1280x720 기
 for (const layout of ['editorial', 'minimal', 'story'] as LayoutId[]) {
   const box = resolveTextBox({ textZone: 'left-third', layout }, 1280, 720);
   console.log(`  layout=${layout.padEnd(10)} boxY=${box.boxY}`);
+}
+
+section('7) FontStyleId 5종 — weight/family 표 및 구→신 id 매핑');
+const FONT_IDS: FontStyleId[] = ['serif-thin', 'serif-regular', 'serif-bold', 'gothic-regular', 'gothic-bold'];
+for (const id of FONT_IDS) {
+  const spec = fontSpecFor(id);
+  console.log(`  ${id.padEnd(16)} weight=${spec.weight}  family=${spec.family}`);
+}
+console.log('\n구 id → 신 id 매핑 (LEGACY_FONT_STYLE_MAP):');
+for (const [oldId, newId] of Object.entries(LEGACY_FONT_STYLE_MAP)) {
+  console.log(`  "${oldId}" → "${newId}"  (weight ${oldId === 'gothic' ? '700 → 700 (동일, id만 변경)' : ''})`);
+}
+console.log(`\n정규화 확인: normalizeFontStyleId('gothic') = "${normalizeFontStyleId('gothic')}"`);
+console.log(`정규화 확인: normalizeFontStyleId(undefined) = "${normalizeFontStyleId(undefined)}"`);
+
+section('8) 行頭・行末禁則 — 적용 전/후 줄바꿈 비교 (일본어 예문 2개 + 한국어 예문 1개)');
+// 순수 함수만 쓰는 dump 스크립트 규칙(Electron/DOM 미사용)에 맞춰, 실제 캔버스 대신
+// 문자 1개당 고정 폭을 갖는 합성 측정 함수로 재현한다(textLayout.test.ts와 동일한 방식).
+function syntheticMeasure(charWidthAt16: number): MeasureFn {
+  return (text, fontSizePx) => Array.from(text).length * charWidthAt16 * (fontSizePx / 16);
+}
+const kinsokuMeasure = syntheticMeasure(10);
+const kinsokuFontSize = 16;
+
+function printKinsokuComparison(label: string, lines: string[], maxWidth: number) {
+  console.log(`\n--- ${label} (maxWidth=${maxWidth}) ---`);
+  console.log('  적용 전:');
+  lines.forEach((line, i) => console.log(`    [${i}] "${line}"`));
+  const fixed = applyKinsoku(lines, kinsokuFontSize, maxWidth, kinsokuMeasure);
+  console.log('  적용 후:');
+  fixed.forEach((line, i) => console.log(`    [${i}] "${line}"`));
+  const violations = fixed.filter((l, i) => i > 0 && l.startsWith('、')).length
+    + fixed.filter((l, i) => i < fixed.length - 1 && l.endsWith('「')).length;
+  console.log(`  잔여 위반: ${violations}건, 내용 보존: ${fixed.join('') === lines.join('') ? 'OK' : 'MISMATCH'}`);
+}
+
+printKinsokuComparison('일본어 예문 1 — 行頭禁則(、)', ['ふと', '、あの日を思い出す'], 1000);
+printKinsokuComparison('일본어 예문 2 — 行末禁則(「)', ['窓辺の「', '静かな朝」'], 1000);
+printKinsokuComparison('한국어 예문 — 行頭禁則(.)', ['안녕하세요', '.정말 그렇습니다'], 1000);
+
+section('9) 자간(letterSpacing) 0 / 0.1em / 0.2em — 줄바꿈 결과 비교');
+const letterSpacingSample = '이 멜로디 기억나 오늘도 어제처럼 설레는 하루';
+for (const em of [0, 0.1, 0.2]) {
+  // letterSpacingPx가 실제로 폭 계산에 반영되는지 보여주기 위해, 측정 함수 자체에
+  // "글자수 * (기본폭 + 자간px)"를 반영한다 — makeCanvasMeasurer가 ctx.letterSpacing을
+  // 설정하는 것과 동일한 효과를 합성 측정 함수로 재현한 것.
+  const measureWithSpacing: MeasureFn = (text, fontSizePx) => {
+    const base = Array.from(text).length * 10 * (fontSizePx / 16);
+    const spacingPx = parseFloat(letterSpacingPx(em, fontSizePx));
+    return base + Math.max(0, Array.from(text).length - 1) * spacingPx;
+  };
+  const layout = layoutText(letterSpacingSample, {
+    measure: measureWithSpacing,
+    maxWidth: 300,
+    maxHeight: 400,
+    startFontSize: 32,
+    minFontSize: 20,
+    maxLines: 4
+  });
+  console.log(`\n--- letterSpacing=${em}em (letterSpacingPx@32px = ${letterSpacingPx(em, 32)}) ---`);
+  layout.lines.forEach((line, i) => console.log(`  [${i}] "${line}"  (width=${measureWithSpacing(line, layout.fontSize).toFixed(1)})`));
 }
 
 section('요약');

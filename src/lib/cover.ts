@@ -1,7 +1,7 @@
 import type { CoverConfig, CoverRenderInput, ProjectConfig } from '../types';
-import { titleFont } from './fonts';
+import { ensureFontsLoaded, titleFont } from './fonts';
 import { decideReadability, sampleAverageLuminance } from './readability';
-import { clampVerticalSafeArea, layoutText, makeCanvasMeasurer } from './textLayout';
+import { clampVerticalSafeArea, layoutText, letterSpacingPx, makeCanvasMeasurer } from './textLayout';
 
 // DistroKid 등 음원 유통 규격: 3000x3000 정사각, 최소 1400x1400 권장, RGB JPG/PNG.
 export const COVER_SIZE = 3000;
@@ -16,6 +16,8 @@ export function defaultCoverConfig(config: ProjectConfig): CoverConfig {
     textColor: config.textColor,
     overlayStrength: config.overlayStrength,
     fontStyle: config.fontStyle,
+    letterSpacing: config.letterSpacing,
+    lineHeightRatio: config.lineHeightRatio,
     autoTextColor: config.autoTextColor,
     brandLine: config.brandLine,
     showBadge: false,
@@ -70,9 +72,13 @@ export async function renderCover(input: CoverRenderInput, size = COVER_SIZE): P
   const textColor = auto ? auto.textColor : input.textColor;
   const scrimRGB = auto ? auto.scrimRGB : ([18, 14, 10] as [number, number, number]);
 
+  // fillText 전에 폰트 로드를 기다린다(실패해도 throw하지 않고 시스템 폴백으로 그린다).
+  await ensureFontsLoaded(input.fontStyle, startFontSize);
+
+  const letterSpacing = input.letterSpacing ?? 0;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  const measure = makeCanvasMeasurer(ctx, fontSize => titleFont(input.fontStyle, fontSize));
+  const measure = makeCanvasMeasurer(ctx, fontSize => titleFont(input.fontStyle, fontSize), letterSpacing);
   const layout = layoutText(input.headline, {
     measure,
     maxWidth,
@@ -80,7 +86,7 @@ export async function renderCover(input: CoverRenderInput, size = COVER_SIZE): P
     startFontSize,
     minFontSize,
     maxLines: 3, // "1줄 지향" — 짧은 문구는 넓은 maxWidth 덕에 대부분 1줄로 조판된다
-    lineHeightRatio: 1.22
+    lineHeightRatio: input.lineHeightRatio ?? 1.22
   });
 
   const blockHeight = layout.lines.length * layout.lineHeight;
@@ -110,8 +116,10 @@ export async function renderCover(input: CoverRenderInput, size = COVER_SIZE): P
   ctx.fillStyle = textColor;
   layout.lines.forEach((line, index) => {
     ctx.font = titleFont(input.fontStyle, layout.fontSize);
+    ctx.letterSpacing = letterSpacingPx(letterSpacing, layout.fontSize);
     ctx.fillText(line, boxX, startY + layout.lineHeight / 2 + index * layout.lineHeight);
   });
+  ctx.letterSpacing = '0px';
 
   const dividerY = Math.min(safeBottom - 4 * scale, startY + blockHeight + 46 * scale);
   if (input.showDivider) {

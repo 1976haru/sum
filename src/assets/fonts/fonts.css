@@ -1,0 +1,65 @@
+/* 번들 폰트: Noto Serif KR / Noto Sans KR / Noto Serif JP (SIL OFL 1.1, licenses/ 참조).
+   Google Fonts 배포용 가변 폰트(NotoXxx[wght].ttf)를 고정 weight로 인스턴스화한 뒤
+   한글/일본어/라틴/문장부호 범위로만 서브셋하고 woff2로 압축했다(scripts는 저장소에 없음 —
+   fonttools varLib.instancer + fonttools.subset, 실행 커맨드는 Phase 1-2 보고서 참고).
+   Batang/Malgun Gothic/Yu Mincho/Yu Gothic은 시스템 폰트라 번들하지 않고 폴백 체인의
+   이름으로만 남겨둔다. */
+
+@font-face {
+  font-family: 'Noto Serif KR';
+  font-weight: 300;
+  font-style: normal;
+  font-display: block;
+  src: url('./NotoSerifKR-300.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Noto Serif KR';
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+  src: url('./NotoSerifKR-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Noto Serif KR';
+  font-weight: 600;
+  font-style: normal;
+  font-display: block;
+  src: url('./NotoSerifKR-600.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Noto Sans KR';
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+  src: url('./NotoSansKR-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Noto Sans KR';
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+  src: url('./NotoSansKR-700.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Noto Serif JP';
+  font-weight: 300;
+  font-style: normal;
+  font-display: block;
+  src: url('./NotoSerifJP-300.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Noto Serif JP';
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+  src: url('./NotoSerifJP-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Noto Serif JP';
+  font-weight: 600;
+  font-style: normal;
+  font-display: block;
+  src: url('./NotoSerifJP-600.woff2') format('woff2');
+}

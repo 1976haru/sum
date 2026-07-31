@@ -11,6 +11,7 @@ import StyleStep from './components/steps/StyleStep';
 import ExportStep from './components/steps/ExportStep';
 import { defaultSubline } from './lib/headlines';
 import { defaultCoverConfig } from './lib/cover';
+import { normalizeFontStyleId } from './lib/fonts';
 import type { AIImageSettings, AspectKind, BackgroundImage, ChannelBrandTemplate, ChannelPresetId, Language, ProjectConfig } from './types';
 
 const DEFAULT_CONFIG: ProjectConfig = {
@@ -91,7 +92,11 @@ export default function App() {
       if (!match) return;
       setConfig(current => ({
         ...current,
-        fontStyle: match.fontStyle,
+        // Phase 1-1의 textBox 누락 재발을 막기 위한 체크리스트: StyleStep의 수동 불러오기와
+        // 여기(채널 전환 자동 적용) 양쪽 모두 같은 필드 목록을 갖고 있어야 한다.
+        fontStyle: normalizeFontStyleId(match.fontStyle),
+        letterSpacing: match.letterSpacing,
+        lineHeightRatio: match.lineHeightRatio,
         textColor: match.textColor,
         accent: match.accent,
         overlayStrength: match.overlayStrength,

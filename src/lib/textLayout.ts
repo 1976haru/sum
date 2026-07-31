@@ -12,6 +12,9 @@ export interface LayoutOptions {
   maxLines?: number;
   lineHeightRatio?: number;
   fontStep?: number;
+  // 완성된 줄에 대해 行頭・行末禁則 후처리를 적용할지 (기본 true). measure는 wrapGreedy와
+  // 동일한 함수를 그대로 재사용해 이동 후에도 폭이 maxWidth를 넘지 않는지 검증한다.
+  applyKinsokuRule?: boolean;
 }
 
 export interface TextBlockLayout {
@@ -77,6 +80,78 @@ function ellipsize(line: string, fontSize: number, maxWidth: number, measure: Me
   return '…';
 }
 
+// JIS X 4051 行頭禁則(줄 첫머리 금지) 문자 — 마침표/닫는 괄호/작은 가나 등.
+// ASCII '.' ',' 는 원 목록엔 없지만 한국어 문장에서 반각으로 흔히 쓰이므로 추가했다.
+const LINE_START_FORBIDDEN = new Set(Array.from(
+  '。、．，」』）］｝〉》】〕・…‥ー々ゝゞ？！?!：；:;' +
+  'っゃゅょぁぃぅぇぉゎッャュョァィゥェォヮ' +
+  '.,'
+));
+
+// 行末禁則(줄 끝 금지) 문자 — 여는 괄호류.
+const LINE_END_FORBIDDEN = new Set(Array.from('「『（［｛〈《【〔＄￥＃＠'));
+
+const MAX_KINSOKU_ITERATIONS = 200;
+
+// wrapGreedy가 만든 줄을 건드리지 않고, 완성된 줄 배열만 후처리로 다듬는다.
+// - 다음 줄 첫머리가 금칙 문자로 시작하면 앞줄 끝으로 끌어올린다.
+// - 이번 줄 끝이 금칙 문자로 끝나면 다음 줄 앞으로 내린다.
+// - 연속된 금칙 문자는 통째로 이동한다.
+// - 이동으로 인해 상대 줄이 maxWidth를 넘으면 그 이동은 하지 않는다(원상 복구).
+// - 줄 전체가 금칙 문자뿐이면 그 줄은 건드리지 않는다(무한루프 방지).
+export function applyKinsoku(lines: string[], fontSize: number, maxWidth: number, measure: MeasureFn): string[] {
+  if (lines.length <= 1) return lines;
+  const result = lines.slice();
+  let iterations = 0;
+  let changed = true;
+
+  while (changed && iterations < MAX_KINSOKU_ITERATIONS) {
+    changed = false;
+
+    // 行頭禁則: i번째 줄 첫머리의 금칙 문자열을 (i-1)번째 줄 끝으로 옮긴다.
+    for (let i = 1; i < result.length && iterations < MAX_KINSOKU_ITERATIONS; i++) {
+      iterations++;
+      const line = result[i];
+      if (!line) continue;
+      let cut = 0;
+      while (cut < line.length && LINE_START_FORBIDDEN.has(line[cut])) cut++;
+      if (cut === 0 || cut === line.length) continue; // 없음, 또는 줄 전체가 금칙 문자
+      const moved = line.slice(0, cut);
+      const candidatePrev = result[i - 1] + moved;
+      if (measure(candidatePrev, fontSize) > maxWidth) continue; // 넘치면 이동하지 않는다
+      result[i - 1] = candidatePrev;
+      result[i] = line.slice(cut);
+      changed = true;
+    }
+
+    // 行末禁則: i번째 줄 끝의 금칙 문자열을 (i+1)번째 줄 앞으로 옮긴다.
+    for (let i = 0; i < result.length - 1 && iterations < MAX_KINSOKU_ITERATIONS; i++) {
+      iterations++;
+      const line = result[i];
+      if (!line) continue;
+      let cut = line.length;
+      while (cut > 0 && LINE_END_FORBIDDEN.has(line[cut - 1])) cut--;
+      if (cut === line.length || cut === 0) continue;
+      const moved = line.slice(cut);
+      const candidateNext = moved + result[i + 1];
+      if (measure(candidateNext, fontSize) > maxWidth) continue;
+      result[i] = line.slice(0, cut);
+      result[i + 1] = candidateNext;
+      changed = true;
+    }
+  }
+  if (iterations >= MAX_KINSOKU_ITERATIONS) warnGuard('applyKinsoku');
+  return result;
+}
+
+// letterSpacing(em)을 캔버스 letterSpacing 속성용 px 문자열로 변환한다.
+// em은 폰트 크기에 비례해야 하는데 canvas는 DOM cascade 밖이라 "0.1em" 문자열을 그대로 주면
+// 브라우저마다 기준 크기 해석이 갈릴 수 있어, 여기서 직접 px로 환산해 넘긴다.
+export function letterSpacingPx(letterSpacingEm: number, fontSizePx: number): string {
+  if (!letterSpacingEm) return '0px';
+  return `${(letterSpacingEm * fontSizePx).toFixed(2)}px`;
+}
+
 function effectiveMaxLines(fontSize: number, maxHeight: number, lineHeightRatio: number, cap: number): number {
   const byHeight = Math.max(1, Math.floor(maxHeight / (fontSize * lineHeightRatio)));
   return Math.max(1, Math.min(cap, byHeight));
@@ -112,6 +187,10 @@ export function layoutText(text: string, opts: LayoutOptions): TextBlockLayout {
     lines[cap - 1] = ellipsize(lines[cap - 1], fontSize, opts.maxWidth, opts.measure);
   }
 
+  if (opts.applyKinsokuRule ?? true) {
+    lines = applyKinsoku(lines, fontSize, opts.maxWidth, opts.measure);
+  }
+
   return { lines, fontSize, lineHeight: fontSize * lineHeightRatio, truncated };
 }
 
@@ -125,9 +204,13 @@ export function clampVerticalSafeArea(startY: number, blockHeight: number, canva
   return y;
 }
 
-export function makeCanvasMeasurer(ctx: CanvasRenderingContext2D, fontBuilder: (fontSizePx: number) => string): MeasureFn {
+// letterSpacingEm(0이면 자간 없음)을 함께 받아 ctx.letterSpacing도 같이 맞춘다.
+// ctx.letterSpacing은 font 문자열에 들어가지 않는 별도 캔버스 속성이라, 여기서 맞추지
+// 않으면 measureText 폭과 실제로 그려지는 폭이 어긋나 줄바꿈이 틀어진다.
+export function makeCanvasMeasurer(ctx: CanvasRenderingContext2D, fontBuilder: (fontSizePx: number) => string, letterSpacingEm = 0): MeasureFn {
   return (text, fontSizePx) => {
     ctx.font = fontBuilder(fontSizePx);
+    if ('letterSpacing' in ctx) ctx.letterSpacing = letterSpacingPx(letterSpacingEm, fontSizePx);
     return ctx.measureText(text).width;
   };
 }

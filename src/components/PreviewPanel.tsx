@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Layers3 } from 'lucide-react';
+import { Layers3, TriangleAlert } from 'lucide-react';
 import type { AspectKind, BackgroundImage, CoverConfig, ProjectConfig, TextBox, TextZone } from '../types';
 import { renderThumbnail } from '../lib/thumbnail';
 import { renderCover } from '../lib/cover';
+import { ensureFontsLoaded } from '../lib/fonts';
 import TextBoxOverlay, { TextBoxToolbar } from './TextBoxOverlay';
 
 interface PreviewPanelProps {
@@ -20,7 +21,19 @@ export default function PreviewPanel({ aspect, onAspectChange, config, coverBase
   const [mini, setMini] = useState(false);
   const [preview, setPreview] = useState('');
   const [busy, setBusy] = useState(false);
+  const [fontWarning, setFontWarning] = useState('');
   const imgRef = useRef<HTMLImageElement>(null);
+
+  // 렌더 파이프라인(thumbnail.ts/cover.ts)도 내부적으로 같은 폰트 로드를 기다리지만,
+  // 조용히 폴백될 뿐 throw하지 않으므로 여기서 별도로 상태를 확인해 화면에 안내한다.
+  useEffect(() => {
+    let cancelled = false;
+    void ensureFontsLoaded(config.fontStyle, 72).then(result => {
+      if (cancelled) return;
+      setFontWarning(result.ok ? '' : `번들 폰트(${result.family.split(',')[0]}, ${result.weight}) 로드 실패 — 시스템 폰트로 표시 중입니다.`);
+    });
+    return () => { cancelled = true; };
+  }, [config.fontStyle]);
 
   useEffect(() => {
     let cancelled = false;
@@ -63,6 +76,7 @@ export default function PreviewPanel({ aspect, onAspectChange, config, coverBase
       {dragEditable && <TextBoxToolbar visible={Boolean(config.textBox)} onRevert={() => onTextBoxCommit({ textBox: undefined })} />}
       <label className="checkbox-row"><input type="checkbox" checked={mini} onChange={event => setMini(event.target.checked)} /> 168px 축소 미리보기</label>
       {busy && <p className="supporting">렌더링 중...</p>}
+      {fontWarning && <p className="supporting font-warning"><TriangleAlert size={14} /> {fontWarning}</p>}
     </aside>
   );
 }

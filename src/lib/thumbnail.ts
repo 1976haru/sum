@@ -1,7 +1,7 @@
 import type { ThumbnailRenderInput } from '../types';
-import { titleFont } from './fonts';
+import { ensureFontsLoaded, titleFont } from './fonts';
 import { decideReadability, sampleAverageLuminance } from './readability';
-import { clampVerticalSafeArea, layoutText, makeCanvasMeasurer } from './textLayout';
+import { clampVerticalSafeArea, layoutText, letterSpacingPx, makeCanvasMeasurer } from './textLayout';
 import { REFERENCE_HEIGHT, REFERENCE_WIDTH, resolveTextBox } from './textBox';
 
 const WIDTH = REFERENCE_WIDTH;
@@ -62,9 +62,14 @@ export async function renderThumbnail(input: ThumbnailRenderInput): Promise<stri
   const alpha = Math.max(0.25, Math.min(0.9, input.overlayStrength));
   const [sr, sg, sb] = scrimRGB;
 
+  // fillText 전에 반드시 폰트 로드를 기다린다 — 못 기다리면 첫 렌더가 폴백 폰트로
+  // 조용히 그려질 수 있다(로드 실패는 throw하지 않고 경고만 남긴다).
+  await ensureFontsLoaded(input.fontStyle, startFontSize);
+
+  const letterSpacing = input.letterSpacing ?? 0;
   ctx.textAlign = align;
   ctx.textBaseline = 'top';
-  const measure = makeCanvasMeasurer(ctx, size => titleFont(input.fontStyle, size));
+  const measure = makeCanvasMeasurer(ctx, size => titleFont(input.fontStyle, size), letterSpacing);
   const footerHeight = 96 * scale;
   const safeBottom = height * 0.95;
   const layout = layoutText(input.headline, {
@@ -73,7 +78,8 @@ export async function renderThumbnail(input: ThumbnailRenderInput): Promise<stri
     maxHeight: Math.max(startFontSize, safeBottom - titleY - footerHeight),
     startFontSize,
     minFontSize,
-    maxLines: 3
+    maxLines: 3,
+    lineHeightRatio: input.lineHeightRatio
   });
   const blockHeight = layout.lines.length * layout.lineHeight;
   const startY = clampVerticalSafeArea(titleY, blockHeight, height, 0.05);
@@ -110,8 +116,10 @@ export async function renderThumbnail(input: ThumbnailRenderInput): Promise<stri
   ctx.fillStyle = textColor;
   layout.lines.forEach((line, index) => {
     ctx.font = titleFont(input.fontStyle, layout.fontSize);
+    ctx.letterSpacing = letterSpacingPx(letterSpacing, layout.fontSize);
     ctx.fillText(line, boxX, startY + index * layout.lineHeight);
   });
+  ctx.letterSpacing = '0px';
 
   let lineY = startY + blockHeight + 10 * scale;
   const dividerStartX = align === 'left' ? boxX : boxX - 205 * scale;

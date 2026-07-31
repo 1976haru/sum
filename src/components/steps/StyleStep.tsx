@@ -1,6 +1,15 @@
 import { useEffect, useState } from 'react';
 import { Save, Trash2, Upload } from 'lucide-react';
+import { normalizeFontStyleId } from '../../lib/fonts';
 import type { ChannelBrandTemplate, FontStyleId, ProjectConfig, TextZone } from '../../types';
+
+const FONT_STYLE_LABELS: Record<FontStyleId, string> = {
+  'serif-thin': '얇은 한글 세리프(기본)',
+  'serif-regular': '보통 세리프',
+  'serif-bold': '굵은 세리프',
+  'gothic-regular': '고딕 보통',
+  'gothic-bold': '고딕 굵게'
+};
 
 interface StyleStepProps {
   config: ProjectConfig;
@@ -15,6 +24,8 @@ function templateFromConfig(config: ProjectConfig, artistName: string): ChannelB
   return {
     channelPreset: config.channelPreset,
     fontStyle: config.fontStyle,
+    letterSpacing: config.letterSpacing,
+    lineHeightRatio: config.lineHeightRatio,
     textColor: config.textColor,
     accent: config.accent,
     overlayStrength: config.overlayStrength,
@@ -41,7 +52,12 @@ export default function StyleStep({ config, onConfigChange, artistName, onArtist
 
   function applyTemplate(template: ChannelBrandTemplate) {
     onConfigChange({
-      fontStyle: template.fontStyle,
+      // Phase 1-1에서 textBox가 이 경로에서 누락됐던 실수를 반복하지 않도록: 여기(수동 불러오기)와
+      // App.tsx의 채널 자동 적용 useEffect 양쪽 모두에 신규 필드를 넣는다. 구 fontStyle('gothic')도
+      // 여기서 정규화해 <select>가 항상 유효한 값을 갖게 한다.
+      fontStyle: normalizeFontStyleId(template.fontStyle),
+      letterSpacing: template.letterSpacing,
+      lineHeightRatio: template.lineHeightRatio,
       textColor: template.textColor,
       accent: template.accent,
       overlayStrength: template.overlayStrength,
@@ -76,9 +92,7 @@ export default function StyleStep({ config, onConfigChange, artistName, onArtist
 
       <div className="field-grid">
         <label>폰트<select value={config.fontStyle} onChange={event => onConfigChange({ fontStyle: event.target.value as FontStyleId })}>
-          <option value="serif-thin">얇은 한글 세리프(기본)</option>
-          <option value="serif-bold">굵은 세리프</option>
-          <option value="gothic">고딕</option>
+          {(Object.entries(FONT_STYLE_LABELS) as Array<[FontStyleId, string]>).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
         </select></label>
         <label>텍스트 위치<select value={config.textZone} onChange={event => onConfigChange({ textZone: event.target.value as TextZone })}>
           {Object.entries(TEXT_ZONE_LABELS).map(([zone, label]) => <option key={zone} value={zone}>{label}</option>)}
@@ -90,6 +104,11 @@ export default function StyleStep({ config, onConfigChange, artistName, onArtist
           <button type="button" className="secondary" onClick={() => onConfigChange({ textBox: undefined })}>프리셋으로 되돌리기</button>
         </p>
       )}
+
+      <div className="field-grid">
+        <label>자간<input type="range" min="-0.05" max="0.3" step="0.01" value={config.letterSpacing ?? 0} onChange={event => onConfigChange({ letterSpacing: Number(event.target.value) })} /> {(config.letterSpacing ?? 0).toFixed(2)}em</label>
+        <label>줄 간격<input type="range" min="1" max="2" step="0.02" value={config.lineHeightRatio ?? 1.28} onChange={event => onConfigChange({ lineHeightRatio: Number(event.target.value) })} /> ×{(config.lineHeightRatio ?? 1.28).toFixed(2)}</label>
+      </div>
 
       <div className="field-grid">
         <label>글자 색<input type="color" value={config.textColor} onChange={event => onConfigChange({ textColor: event.target.value })} /></label>
