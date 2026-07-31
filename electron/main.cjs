@@ -5,7 +5,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const archiver = require('archiver');
-const ExcelJS = require('exceljs');
+const { parseChecklistXlsx } = require('./checklist.cjs');
 const ffmpegStatic = require('ffmpeg-static');
 const ffprobeStatic = require('ffprobe-static');
 
@@ -316,79 +316,10 @@ async function generateAIBackground({ prompt, negativePrompt, size, aspect }) {
       : generateQwenBackground(settings, prompt, negativePrompt, size)
   ), 2);
 }
-// --- 파트D: 곡세트 체크리스트 xlsx 임포터(읽기 전용). 시트 구조가 다르면 추측하지 않고 에러를 던진다. ---
-const CHECKLIST_SHEET_NAMES = ['한국채널', '일본채널'];
-const CHECKLIST_HEADER_ROW = 7;
-const CHECKLIST_DATA_START_ROW = 8;
-const MAX_SHEET_ROWS = 500; // 파트G: 어떤 대용량 반복도 이 상한을 넘기지 않는다.
-const CHECKLIST_EXPECTED_HEADERS = {
-  A: '번호', B: '공개목표', C: '시즌', D: '곡세트/영상기획', E: '핵심청자·상황',
-  K: '썸네일/배경 방향', L: '유튜브 제목 예시', M: '핵심 키워드', R: '썸네일'
-};
-
-// 수식 셀은 {formula, result} 형태로 들어올 수 있다. 계산된 결과값만 쓰고 수식 문자열은 무시한다.
-function cellText(cell) {
-  const value = cell && cell.value;
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'object') {
-    if (Array.isArray(value.richText)) return value.richText.map(part => part.text || '').join('').trim();
-    if (Object.prototype.hasOwnProperty.call(value, 'result')) return String(value.result ?? '').trim();
-    if (value instanceof Date) return value.toISOString();
-    if (Object.prototype.hasOwnProperty.call(value, 'text')) return String(value.text).trim();
-    return '';
-  }
-  return String(value).trim();
-}
-
-function validateChecklistHeaders(worksheet, sheetName) {
-  const headerRow = worksheet.getRow(CHECKLIST_HEADER_ROW);
-  const mismatches = [];
-  for (const [col, expected] of Object.entries(CHECKLIST_EXPECTED_HEADERS)) {
-    const actual = cellText(headerRow.getCell(col));
-    if (actual !== expected) mismatches.push(`${col}열: 기대 "${expected}" / 실제 "${actual || '(비어있음)'}"`);
-  }
-  if (mismatches.length) {
-    throw new Error(`[체크리스트] "${sheetName}" 시트의 ${CHECKLIST_HEADER_ROW}행이 예상된 헤더와 다릅니다. 추측해서 진행하지 않고 중단합니다.\n${mismatches.join('\n')}`);
-  }
-}
-
-function parseChecklistSheet(worksheet, sheetName) {
-  validateChecklistHeaders(worksheet, sheetName);
-  const rows = [];
-  const hardLimit = CHECKLIST_DATA_START_ROW + MAX_SHEET_ROWS - 1;
-  const lastRow = Math.min(worksheet.rowCount, hardLimit);
-  for (let r = CHECKLIST_DATA_START_ROW; r <= lastRow; r++) {
-    const row = worksheet.getRow(r);
-    const rawNumber = cellText(row.getCell('A'));
-    if (!rawNumber) continue; // 번호가 없는 행은 세트 목록 끝으로 간주하고 건너뛴다.
-    const numeric = parseInt(rawNumber, 10);
-    const setNumber = String(Number.isFinite(numeric) ? numeric : rawNumber).padStart(2, '0');
-    rows.push({
-      setNumber,
-      releaseTarget: cellText(row.getCell('B')),
-      season: cellText(row.getCell('C')),
-      projectName: cellText(row.getCell('D')),
-      moodHint: cellText(row.getCell('E')),
-      backgroundDirection: cellText(row.getCell('K')),
-      titleExample: cellText(row.getCell('L')),
-      keywords: cellText(row.getCell('M')),
-      thumbnailStatus: cellText(row.getCell('R'))
-    });
-  }
-  if (worksheet.rowCount > hardLimit) log(`[체크리스트] "${sheetName}": ${MAX_SHEET_ROWS}행 상한을 넘어 이후 행은 건너뛰었습니다.`);
-  return rows;
-}
-
-async function parseChecklistXlsx(filePath) {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(filePath);
-  const sheets = {};
-  for (const sheetName of CHECKLIST_SHEET_NAMES) {
-    const worksheet = workbook.getWorksheet(sheetName);
-    if (!worksheet) throw new Error(`[체크리스트] 시트 "${sheetName}"를 찾을 수 없습니다. 파일 구조를 확인하세요.`);
-    sheets[sheetName] = parseChecklistSheet(worksheet, sheetName);
-  }
-  return sheets;
+// 파트D: 곡세트 체크리스트 xlsx 파싱은 electron/checklist.cjs(순수 모듈, vitest 대상)에 있다.
+// 여기서는 경고 로그를 렌더러로 보내는 콜백만 연결한다.
+function loadChecklistXlsx(filePath) {
+  return parseChecklistXlsx(filePath, { onWarn: log });
 }
 
 function createWindow() {
@@ -498,7 +429,7 @@ ipcMain.handle('dialog:pick-xlsx', async () => {
   });
   return result.canceled ? null : result.filePaths[0];
 });
-ipcMain.handle('checklist:load-xlsx', (_event, filePath) => parseChecklistXlsx(filePath));
+ipcMain.handle('checklist:load-xlsx', (_event, filePath) => loadChecklistXlsx(filePath));
 ipcMain.handle('clipboard:write-text', (_event, text) => { clipboard.writeText(String(text || '')); return true; });
 ipcMain.handle('playlist:cancel', (_event, jobId) => {
   const child = activeJobs.get(jobId);

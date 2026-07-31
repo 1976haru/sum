@@ -7,3 +7,6 @@ Thumbs.db
 *.tsbuildinfo
 /vite.config.js
 /vite.config.d.ts
+
+# 실제 채널 기획이 담긴 곡세트 체크리스트. 절대 커밋하지 않는다(fixtures/checklist.fixture.xlsx는 더미 픽스처이므로 무방).
+fixtures/checklist.local.xlsx
