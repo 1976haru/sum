@@ -67,8 +67,11 @@ export async function renderCover(input: CoverRenderInput, size = COVER_SIZE): P
   const maxWidth = size * 0.76;
   const boxX = size / 2;
   const centerY = size * 0.5;
+  // Phase 1-4 이전에는 상한이었다. 지금은 이분 탐색 시작점/기본값이다.
   const startFontSize = 250 * scale;
   const minFontSize = 96 * scale;
+  // 커버는 3000×3000이라 여백이 썸네일보다 넓다 — 시작점이며 실제 렌더를 보고 조정했다.
+  const maxFontSize = 380 * scale;
   const safeTop = size * 0.05;
   const safeBottom = size * 0.95;
 
@@ -85,6 +88,7 @@ export async function renderCover(input: CoverRenderInput, size = COVER_SIZE): P
     maxHeight: safeBottom - safeTop,
     startFontSize,
     minFontSize,
+    maxFontSize,
     maxLines: 3, // "1줄 지향" — 짧은 문구는 넓은 maxWidth 덕에 대부분 1줄로 조판된다
     lineHeightRatio: input.lineHeightRatio ?? 1.22
   });

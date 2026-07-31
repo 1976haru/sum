@@ -203,6 +203,50 @@ for (const accent of ['#b4833f', '#17304f', '#a13d2b']) {
   console.log(`  accent=${accent}  →  top=${top}  bottom=${bottom}`);
 }
 
+section('12) Phase 1-4 — 문구 길이별 적합 폰트 크기 (좌측 1/3, 1280 기준, maxWidth=530)');
+// CJK 1em / 라틴 0.5em 근사 measure — 지시서 참고표와 같은 근사식이다. 실제 폰트 메트릭과는
+// 차이가 있다(보고서 5번 항목 참고, 브라우저 실렌더로 별도 확인함).
+function approxCjkLatinMeasure(text: string, fontSizePx: number): number {
+  let width = 0;
+  for (const ch of Array.from(text)) {
+    width += fontSizePx * (/^[\x00-\x7F]$/.test(ch) ? 0.5 : 1.0);
+  }
+  return width;
+}
+const LEFT_THIRD_MAX_WIDTH = 530;
+const LEFT_THIRD_MAX_HEIGHT = 383; // safeBottom(684) - titleY(205) - footerHeight(96), 1280 기준
+const START_FONT_SIZE = 72;
+const MIN_FONT_SIZE = 34;
+const MAX_FONT_SIZE = 140;
+const phrases = [
+  '겨울밤',
+  '창가의 오후',
+  '가을 아침의 커피',
+  '가을 아침의 향긋한 커피 한 잔',
+  '가을 아침에 듣기 좋은 추억 팝송',
+  '가을 아침에 듣기 좋은 추억의 팝송 모음집입니다 오늘도'
+];
+let totalProbes = 0;
+console.log(`${'문구'.padEnd(28)} ${'글자수'.padEnd(6)} ${'fontSize'.padEnd(10)} ${'168px 환산'.padEnd(12)} ${'truncated'.padEnd(10)} probes`);
+for (const phrase of phrases) {
+  let probes = 0;
+  const layout = layoutText(phrase, {
+    measure: approxCjkLatinMeasure,
+    maxWidth: LEFT_THIRD_MAX_WIDTH,
+    maxHeight: LEFT_THIRD_MAX_HEIGHT,
+    startFontSize: START_FONT_SIZE,
+    minFontSize: MIN_FONT_SIZE,
+    maxFontSize: MAX_FONT_SIZE,
+    maxLines: 3,
+    onFontSizeProbe: () => { probes++; }
+  });
+  totalProbes += probes;
+  const effectivePxAt168 = (layout.fontSize * 168 / 1280).toFixed(1);
+  console.log(`${phrase.padEnd(28)} ${String(Array.from(phrase).length).padEnd(6)} ${layout.fontSize.toFixed(1).padEnd(10)} ${effectivePxAt168.padEnd(12)} ${String(layout.truncated).padEnd(10)} ${probes}`);
+}
+console.log(`\n(참고용 근사치입니다 — 실제 폰트 메트릭 기준 판단은 브라우저 실렌더로 별도 확인했습니다. 보고서 참고.)`);
+console.log(`문구 6개 렌더 시 probe(wrapGreedy 호출) 평균: ${(totalProbes / phrases.length).toFixed(1)}회/렌더, 개별 최대는 위 표의 probes 열 참고 — 모두 12회 이하여야 한다.`);
+
 section('요약');
 console.log(`조명 어휘 중복이 발견된 계절×시간대 조합 수: ${duplicateComboCount} / ${SEASON_IDS.length * TIME_IDS.length}`);
 console.log('(이 숫자는 참고용 요약일 뿐입니다 — 실제 통과/실패 판정은 `npx vitest run`의 promptBuilder.test.ts 린터가 합니다.)');

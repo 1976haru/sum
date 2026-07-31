@@ -1,7 +1,7 @@
 import type { ThumbnailRenderInput } from '../types';
 import { ensureFontsLoaded, titleFont } from './fonts';
 import { decideReadabilityFromProfile, hexToRgb, relativeLuminance, requiredScrimAlpha, sampleLuminanceProfile, TARGET_CONTRAST } from './readability';
-import { clampVerticalSafeArea, layoutText, letterSpacingPx, makeCanvasMeasurer } from './textLayout';
+import { clampVerticalSafeArea, ellipsize, layoutText, letterSpacingPx, makeCanvasMeasurer, type MeasureFn } from './textLayout';
 import { REFERENCE_HEIGHT, REFERENCE_WIDTH, resolveTextBox } from './textBox';
 import { paintFallbackBackground } from './fallbackBackground';
 
@@ -70,8 +70,13 @@ export async function renderThumbnail(input: ThumbnailRenderInput): Promise<Thum
   const { boxX, maxWidth, align, scrimMode } = box;
   const titleY = box.boxY;
   const isSide = scrimMode === 'side';
+  // Phase 1-4 이전에는 이 값이 곧 상한이었다(레이아웃 엔진이 축소만 했다). 지금은 이분 탐색의
+  // 시작점/기본값일 뿐 — 실제 상한은 아래 maxFontSize다.
   const startFontSize = align === 'left' ? (input.layout === 'minimal' ? 82 : 72) * scale : 78 * scale;
   const minFontSize = 34 * scale;
+  // 상한이 없으면 3글자 문구("겨울밤" 등)가 과하게 큰 크기로 나온다. 시작점일 뿐이며
+  // 실제 렌더를 눈으로 보고 조정했다(Phase 1-4 보고서 3번 항목 참고).
+  const maxFontSize = align === 'left' ? 140 * scale : 160 * scale;
 
   // fillText 전에 반드시 폰트 로드를 기다린다 — 못 기다리면 첫 렌더가 폴백 폰트로
   // 조용히 그려질 수 있다(로드 실패는 throw하지 않고 경고만 남긴다).
@@ -89,6 +94,7 @@ export async function renderThumbnail(input: ThumbnailRenderInput): Promise<Thum
     maxHeight: Math.max(startFontSize, safeBottom - titleY - footerHeight),
     startFontSize,
     minFontSize,
+    maxFontSize,
     maxLines: 3,
     lineHeightRatio: input.lineHeightRatio
   });
@@ -177,9 +183,17 @@ export async function renderThumbnail(input: ThumbnailRenderInput): Promise<Thum
   }
 
   if (input.showSubline && input.subline) {
+    // Phase 1-4: 부제는 제목과 독립된 고정 크기가 아니라, 원래 비율(26/startFontSize)을
+    // 유지한 채 제목 크기를 따라간다 — 제목만 커지고 부제가 그대로면 조판이 무너진다.
+    // 다만 비율을 지키다 보면 제목이 3줄까지 커진 경우 부제 폭이 프레임 밖으로 넘칠 수 있어
+    // (실제 렌더로 확인한 회귀 — 보고서 3번 항목), headline과 같은 maxWidth로 말줄임한다.
+    const sublineFontSize = layout.fontSize * (26 / startFontSize);
+    const sublineFont = `500 ${sublineFontSize}px "Malgun Gothic", "Yu Gothic", sans-serif`;
+    const sublineMeasure: MeasureFn = subText => { ctx.font = sublineFont; return ctx.measureText(subText).width; };
+    const sublineText = ellipsize(input.subline, sublineFontSize, maxWidth, sublineMeasure);
     ctx.fillStyle = textColor;
-    ctx.font = `500 ${26 * scale}px "Malgun Gothic", "Yu Gothic", sans-serif`;
-    ctx.fillText(input.subline, boxX, lineY + 22 * scale);
+    ctx.font = sublineFont;
+    ctx.fillText(sublineText, boxX, lineY + sublineFontSize * 0.85);
   }
 
   if (input.showBadge && input.brandLine) {

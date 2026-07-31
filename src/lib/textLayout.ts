@@ -7,14 +7,22 @@ export interface LayoutOptions {
   measure: MeasureFn;
   maxWidth: number;
   maxHeight: number;
+  // Phase 1-4 이전에는 이 값이 사실상 상한이었다(축소 전용 루프). 지금은 이분 탐색의
+  // 시작점/기본값일 뿐이다 — maxFontSize를 안 주면 예전처럼 이 값이 곧 상한이 된다
+  // (하위 호환: 기존 호출부·테스트가 그대로 동작한다).
   startFontSize: number;
   minFontSize: number;
+  // 확대 상한. 생략하면 startFontSize를 상한으로 쓴다(= 기존 축소 전용 동작).
+  maxFontSize?: number;
   maxLines?: number;
   lineHeightRatio?: number;
   fontStep?: number;
   // 완성된 줄에 대해 行頭・行末禁則 후처리를 적용할지 (기본 true). measure는 wrapGreedy와
   // 동일한 함수를 그대로 재사용해 이동 후에도 폭이 maxWidth를 넘지 않는지 검증한다.
   applyKinsokuRule?: boolean;
+  // 테스트/진단용 훅. 이분 탐색이 fontSize 하나를 시도(=wrapGreedy 1회 호출)할 때마다 불린다.
+  // 렌더 로직에는 영향을 주지 않는다 — 호출 횟수를 세는 용도(완료 기준 "12회 이하" 실측)로만 쓴다.
+  onFontSizeProbe?: (fontSize: number, lineCount: number) => void;
 }
 
 export interface TextBlockLayout {
@@ -27,8 +35,8 @@ export interface TextBlockLayout {
 // 어떤 렌더 루프도 이 상한을 넘기지 않는다: 조건을 못 맞춰도 경고 후 반드시 반환한다.
 const MAX_ITERATIONS = 5000;
 
-function warnGuard(context: string) {
-  if (typeof console !== 'undefined') console.warn(`[textLayout] ${context}: 최대 반복 횟수(${MAX_ITERATIONS})에 도달해 강제 종료했습니다.`);
+function warnGuard(context: string, limit: number = MAX_ITERATIONS) {
+  if (typeof console !== 'undefined') console.warn(`[textLayout] ${context}: 최대 반복 횟수(${limit})에 도달해 강제 종료했습니다.`);
 }
 
 function wrapGreedy(text: string, fontSize: number, maxWidth: number, measure: MeasureFn): string[] {
@@ -66,7 +74,7 @@ function wrapGreedy(text: string, fontSize: number, maxWidth: number, measure: M
   return lines;
 }
 
-function ellipsize(line: string, fontSize: number, maxWidth: number, measure: MeasureFn): string {
+export function ellipsize(line: string, fontSize: number, maxWidth: number, measure: MeasureFn): string {
   if (measure(line, fontSize) <= maxWidth) return line;
   const chars = Array.from(line);
   let guard = 0;
@@ -188,34 +196,119 @@ function effectiveMaxLines(fontSize: number, maxHeight: number, lineHeightRatio:
   return Math.max(1, Math.min(cap, byHeight));
 }
 
-// 어절 우선 줄바꿈 → 3줄 제한 초과 시 폰트 자동 축소(하한까지) → 그래도 넘치면 말줄임.
-// maxHeight는 세로 안전영역(상하 여백 제외) 높이이며, 축소 루프는 줄 수와 세로 높이를 함께 만족할 때까지 반복한다.
+// 이분 탐색 상한 — 범위가 minFontSize~maxFontSize(보통 34~200 정도)면 12회로 충분하다
+// (log2(200-34) ≈ 7.4). wrapGreedy는 문자 단위 폴백이 있어 가볍지 않고 미리보기·드래그마다
+// 매번 불리므로, 선형 탐색(수십 회) 대신 반드시 이분 탐색을 쓴다.
+const MAX_FONT_SEARCH_ITERATIONS = 12;
+
+interface FontProbeResult {
+  ok: boolean; // 이 fontSize에서 줄 수·폭 제약을 모두 만족하는지(=말줄임 없이 들어가는지)
+  lines: string[];
+}
+
+interface FontFitResult {
+  fontSize: number;
+  lines: string[];
+  fits: boolean; // false면 minFontSize로도 못 맞춘 것 — 호출부가 말줄임을 적용해야 한다
+}
+
+// minFontSize~maxFontSize 범위에서 "줄 수 ≤ cap 이고 어느 줄도 maxWidth를 넘지 않는"
+// 조건을 만족하는 가장 큰 fontSize를 이분 탐색으로 찾는다. wrapGreedy 자체는 손대지 않는다.
+function findFittingFontSize(
+  text: string,
+  measure: MeasureFn,
+  maxWidth: number,
+  maxHeight: number,
+  minFontSize: number,
+  maxFontSize: number,
+  lineHeightRatio: number,
+  maxLinesCap: number,
+  onProbe?: (fontSize: number, lineCount: number) => void
+): FontFitResult {
+  let iterations = 0;
+
+  function probe(fontSize: number): FontProbeResult {
+    iterations++;
+    const cap = effectiveMaxLines(fontSize, maxHeight, lineHeightRatio, maxLinesCap);
+    const lines = wrapGreedy(text, fontSize, maxWidth, measure);
+    onProbe?.(fontSize, lines.length);
+    if (!lines.length || lines.length > cap) return { ok: false, lines };
+    const withinWidth = lines.every(line => measure(line, fontSize) <= maxWidth + 1e-6);
+    return { ok: withinWidth, lines };
+  }
+
+  const lo = Math.min(minFontSize, maxFontSize);
+  const hi = Math.max(minFontSize, maxFontSize);
+
+  const loProbe = probe(lo);
+  if (!loProbe.ok) {
+    // 최소 크기로도 안 맞는다 — 이분 탐색할 필요가 없다. 호출부가 말줄임으로 처리한다.
+    return { fontSize: lo, lines: loProbe.lines, fits: false };
+  }
+
+  const hiProbe = probe(hi);
+  if (hiProbe.ok) {
+    // 상한 크기가 이미 맞는다 — 그보다 큰 시도는 무의미하므로 바로 채택한다.
+    return { fontSize: hi, lines: hiProbe.lines, fits: true };
+  }
+
+  let bestFontSize = lo;
+  let bestLines = loProbe.lines;
+  let low = lo;
+  let high = hi;
+
+  while (iterations < MAX_FONT_SEARCH_ITERATIONS && high - low > 0.5) {
+    const mid = (low + high) / 2;
+    const midProbe = probe(mid);
+    if (midProbe.ok) {
+      low = mid;
+      bestFontSize = mid;
+      bestLines = midProbe.lines;
+    } else {
+      high = mid;
+    }
+  }
+  if (iterations >= MAX_FONT_SEARCH_ITERATIONS) warnGuard('layoutText/fontSearch', MAX_FONT_SEARCH_ITERATIONS);
+
+  return { fontSize: bestFontSize, lines: bestLines, fits: true };
+}
+
+// 어절 우선 줄바꿈 → minFontSize~maxFontSize 범위에서 이분 탐색으로 가장 큰 적합 크기를
+// 찾는다(Phase 1-4, 양방향) → 그래도 minFontSize에서조차 안 맞으면 말줄임.
+// maxHeight는 세로 안전영역(상하 여백 제외) 높이다.
 export function layoutText(text: string, opts: LayoutOptions): TextBlockLayout {
   const maxLinesCap = opts.maxLines ?? 3;
   const lineHeightRatio = opts.lineHeightRatio ?? 1.28;
-  const fontStep = opts.fontStep ?? 4;
   const trimmed = text.trim();
 
   if (!trimmed) return { lines: [], fontSize: opts.startFontSize, lineHeight: opts.startFontSize * lineHeightRatio, truncated: false };
 
-  let fontSize = opts.startFontSize;
-  let cap = effectiveMaxLines(fontSize, opts.maxHeight, lineHeightRatio, maxLinesCap);
-  let lines = wrapGreedy(trimmed, fontSize, opts.maxWidth, opts.measure);
+  // maxFontSize를 안 주면 startFontSize가 곧 상한이 된다(하위 호환 — 예전의 축소 전용 동작).
+  const maxFontSize = Math.max(opts.minFontSize, opts.maxFontSize ?? opts.startFontSize);
 
-  let guard = 0;
-  while (lines.length > cap && fontSize > opts.minFontSize && guard < MAX_ITERATIONS) {
-    guard++;
-    fontSize = Math.max(opts.minFontSize, fontSize - fontStep);
-    cap = effectiveMaxLines(fontSize, opts.maxHeight, lineHeightRatio, maxLinesCap);
-    lines = wrapGreedy(trimmed, fontSize, opts.maxWidth, opts.measure);
-  }
-  if (guard >= MAX_ITERATIONS) warnGuard('layoutText/shrink');
+  const fit = findFittingFontSize(
+    trimmed,
+    opts.measure,
+    opts.maxWidth,
+    opts.maxHeight,
+    opts.minFontSize,
+    maxFontSize,
+    lineHeightRatio,
+    maxLinesCap,
+    opts.onFontSizeProbe
+  );
 
+  const fontSize = fit.fontSize;
+  let lines = fit.lines;
   let truncated = false;
-  if (lines.length > cap) {
+
+  if (!fit.fits) {
+    // minFontSize로도 못 맞춘다 — 기존과 동일하게 자르고 마지막 줄을 말줄임 처리한다.
+    const cap = Math.max(1, effectiveMaxLines(fontSize, opts.maxHeight, lineHeightRatio, maxLinesCap));
     truncated = true;
     lines = lines.slice(0, cap);
-    lines[cap - 1] = ellipsize(lines[cap - 1], fontSize, opts.maxWidth, opts.measure);
+    if (!lines.length) lines = [''];
+    lines[lines.length - 1] = ellipsize(lines[lines.length - 1], fontSize, opts.maxWidth, opts.measure);
   }
 
   if (opts.applyKinsokuRule ?? true) {

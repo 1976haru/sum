@@ -233,3 +233,80 @@ describe('clampVerticalSafeArea', () => {
     expect(y + 200).toBeLessThanOrEqual(950 + 1e-6);
   });
 });
+
+// Phase 1-4: 축소 전용 → 확대·축소 양방향. maxFontSize를 명시적으로 줘야 확대가 열린다
+// (안 주면 startFontSize가 상한인 기존 동작 그대로 — 위 describe('layoutText')가 그걸 검증한다).
+describe('layoutText — 양방향 폰트 적합(Phase 1-4)', () => {
+  const measure = syntheticMeasure(10);
+  const growOpts = {
+    measure,
+    maxWidth: 300,
+    maxHeight: 400,
+    startFontSize: 72,
+    minFontSize: 28,
+    maxFontSize: 200,
+    maxLines: 3
+  };
+
+  it('1) 3자 문구의 fontSize > 18자 문구의 fontSize', () => {
+    const short = layoutText('가나다', growOpts);
+    const long = layoutText('가'.repeat(18), growOpts);
+    expect(short.fontSize).toBeGreaterThan(long.fontSize);
+  });
+
+  it('2) 어떤 문구도 maxFontSize를 넘지 않는다', () => {
+    for (const text of ['가', '가나다', '가나다라마바사', '가'.repeat(18), '가'.repeat(30)]) {
+      const result = layoutText(text, growOpts);
+      expect(result.fontSize).toBeLessThanOrEqual(growOpts.maxFontSize + 1e-6);
+    }
+  });
+
+  it('3) 어떤 문구도 minFontSize 아래로 가지 않는다', () => {
+    for (const text of ['가', '가나다', '가'.repeat(18), '가'.repeat(60), '가'.repeat(300)]) {
+      const result = layoutText(text, growOpts);
+      expect(result.fontSize).toBeGreaterThanOrEqual(growOpts.minFontSize - 1e-6);
+    }
+  });
+
+  it('4) 25자 이상 긴 문구는 truncated=true가 나오되 즉시 반환한다(멈추지 않는다)', () => {
+    // maxHeight를 좁게 잡아 minFontSize(3줄)로도 다 못 담게 만든다.
+    const tightOpts = { ...growOpts, maxHeight: 80, maxLines: 3 };
+    const longText = '가'.repeat(40);
+    const start = Date.now();
+    const result = layoutText(longText, tightOpts);
+    expect(Date.now() - start).toBeLessThan(500);
+    expect(result.truncated).toBe(true);
+    expect(result.lines.length).toBeGreaterThan(0);
+    for (const line of result.lines) expect(measure(line, result.fontSize)).toBeLessThanOrEqual(tightOpts.maxWidth + 1e-6);
+  });
+
+  it('5) 이분 탐색이 12회 상한 안에서 끝난다(wrapGreedy 호출 횟수 실측)', () => {
+    let probeCount = 0;
+    const result = layoutText('가을 아침에 듣기 좋은 추억 팝송', {
+      ...growOpts,
+      minFontSize: 34,
+      maxFontSize: 200, // 범위가 넓어 탐색이 여러 번 필요한 조건
+      onFontSizeProbe: () => { probeCount++; }
+    });
+    expect(probeCount).toBeLessThanOrEqual(12);
+    expect(probeCount).toBeGreaterThan(0);
+    expect(result.fontSize).toBeGreaterThanOrEqual(34);
+  });
+
+  it('6) 빈 문자열/공백 입력에서 예외 없이 빈 배열을 반환한다', () => {
+    expect(() => layoutText('', growOpts)).not.toThrow();
+    expect(() => layoutText('   ', growOpts)).not.toThrow();
+    expect(layoutText('', growOpts).lines).toEqual([]);
+  });
+
+  it('maxFontSize를 생략하면 startFontSize가 상한이 된다(하위 호환)', () => {
+    const { maxFontSize: _omit, ...noMax } = growOpts;
+    const result = layoutText('가', noMax);
+    expect(result.fontSize).toBeLessThanOrEqual(noMax.startFontSize + 1e-6);
+  });
+
+  it('여백이 넉넉하면 startFontSize보다 커진다(핵심 회귀 — 예전엔 절대 못 커졌다)', () => {
+    const result = layoutText('겨울밤', growOpts);
+    expect(result.fontSize).toBeGreaterThan(growOpts.startFontSize);
+  });
+});
