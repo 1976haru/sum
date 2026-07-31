@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { LocationPresetId, SeasonPresetId, TimePresetId } from '../types';
-import { LOCATION_PRESETS, NEGATIVE_PROMPT, SEASON_PRESETS, TIME_PRESETS, buildNegativePrompt, buildPromptVariants } from './promptBuilder';
+import { LOCATION_PRESETS, NEGATIVE_PROMPT, SEASON_PRESETS, SPEC_BLOCK, TIME_PRESETS, buildNegativePrompt, buildPromptVariants } from './promptBuilder';
 
 const LOCATIONS = Object.keys(LOCATION_PRESETS) as LocationPresetId[];
 const SEASONS = Object.keys(SEASON_PRESETS) as SeasonPresetId[];
@@ -8,7 +8,10 @@ const TIMES = Object.keys(TIME_PRESETS) as TimePresetId[];
 
 const STOPWORDS = new Set([
   'a', 'an', 'the', 'and', 'in', 'on', 'with', 'of', 'to', 'at', 'a', 'featuring',
-  'soft', 'warm', 'cool', 'quiet', 'light', 'near', 'against', 'over', 'small'
+  'soft', 'warm', 'cool', 'quiet', 'light', 'near', 'against', 'over', 'small',
+  // winter/morning 고정 조합에서 계절·시간대 절이 모든 장소에 동일하게 붙는 비-변별 단어들
+  // (조명/소재 역할 분리 작업으로 문구가 바뀌어 추가됨). 장소 변별력 검사와는 무관하다.
+  'snowfall', 'frost', 'window', 'glass', 'bare', 'branches', 'early', 'morning', 'long', 'pale', 'shadow', 'shadows'
 ]);
 
 function nounSet(text: string): Set<string> {
@@ -84,5 +87,75 @@ describe('72조합 다양성 린터 — 장소가 다르면 핵심 명사 집합
       SEASONS.flatMap(seasonId => TIMES.map(timeId => buildPromptVariants({ locationId, seasonId, timeId, textZone: 'center', aspect: '16x9' }).qwen))
     );
     expect(new Set(combos).size).toBe(combos.length);
+  });
+});
+
+// 계절(SEASON_PRESETS)은 소재만, 시간대(TIME_PRESETS)는 조명만 서술해야 한다.
+// 두 축이 조명을 동시에 서술하면 "cool blue-grey light" vs "golden hour sunlight"처럼
+// 방향이 충돌하는 지시가 같은 프롬프트에 섞여 들어간다. 색보정은 SPEC_BLOCK이 전담한다.
+const LIGHT_WORDS = [
+  'light', 'lighting', 'lit', 'sunlight', 'sunlit', 'backlit', 'shadow', 'shadows',
+  'bright', 'dark', 'dim', 'glow', 'glowing', 'luminous', 'radiance',
+  'tones', 'grading', 'saturated', 'pastel'
+];
+const MAX_LIGHT_WORDS_PER_COMBO = 4;
+
+function lightWordMatches(text: string): string[] {
+  const lower = text.toLowerCase();
+  const found: string[] = [];
+  for (const word of LIGHT_WORDS) {
+    const matches = lower.match(new RegExp(`\\b${word}\\b`, 'g'));
+    if (matches) found.push(...matches);
+  }
+  return found;
+}
+
+function lightWordSet(text: string): Set<string> {
+  return new Set(lightWordMatches(text));
+}
+
+describe('조명 중복 린터 — 계절은 소재, 시간대는 빛 (역할 분리 강제)', () => {
+  it('1) SEASON_PRESETS 4개의 mood에는 조명 어휘가 하나도 없다', () => {
+    for (const [seasonId, preset] of Object.entries(SEASON_PRESETS)) {
+      const matches = lightWordMatches(preset.mood);
+      expect(matches, `${seasonId} mood="${preset.mood}"에서 조명 어휘 발견: ${matches.join(', ')}`).toEqual([]);
+    }
+  });
+
+  it('2) 72조합 각각에서 계절 절과 시간대 절이 같은 조명 어휘를 동시에 쓰지 않는다', () => {
+    for (const seasonId of SEASONS) {
+      const seasonWords = lightWordSet(SEASON_PRESETS[seasonId].mood);
+      for (const timeId of TIMES) {
+        const timeWords = lightWordSet(TIME_PRESETS[timeId].mood);
+        const overlap = [...seasonWords].filter(word => timeWords.has(word));
+        expect(overlap, `${seasonId} x ${timeId}: 계절·시간대가 같은 조명 어휘를 공유함(${overlap.join(', ')})`).toEqual([]);
+      }
+    }
+  });
+
+  it('3) 72조합 전부, qwen 프롬프트 전문의 조명 어휘 총 등장 횟수가 조합당 상한(4회)을 넘지 않는다', () => {
+    for (const locationId of LOCATIONS) {
+      for (const seasonId of SEASONS) {
+        for (const timeId of TIMES) {
+          const qwen = buildPromptVariants({ locationId, seasonId, timeId, textZone: 'center', aspect: '16x9' }).qwen;
+          const count = lightWordMatches(qwen).length;
+          expect(count, `${locationId}/${seasonId}/${timeId}: 조명 어휘 ${count}회 — "${qwen}"`).toBeLessThanOrEqual(MAX_LIGHT_WORDS_PER_COMBO);
+        }
+      }
+    }
+  });
+
+  it('4) SPEC_BLOCK을 제외한 나머지 절에는 color grading/tones 계열이 없다(색보정은 SPEC_BLOCK 단독 담당)', () => {
+    for (const locationId of LOCATIONS) {
+      for (const seasonId of SEASONS) {
+        for (const timeId of TIMES) {
+          const qwen = buildPromptVariants({ locationId, seasonId, timeId, textZone: 'center', aspect: '16x9' }).qwen;
+          expect(qwen.startsWith(`${SPEC_BLOCK}.`)).toBe(true);
+          const rest = qwen.slice(`${SPEC_BLOCK}.`.length);
+          expect(/\bgrading\b/i.test(rest), `${locationId}/${seasonId}/${timeId}: SPEC_BLOCK 밖에 "grading" 등장 — "${rest}"`).toBe(false);
+          expect(/\btones\b/i.test(rest), `${locationId}/${seasonId}/${timeId}: SPEC_BLOCK 밖에 "tones" 등장 — "${rest}"`).toBe(false);
+        }
+      }
+    }
   });
 });

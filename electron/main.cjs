@@ -30,6 +30,29 @@ function tmpDir() {
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
+
+// 앱이 강제 종료되면 playlist:render의 finally가 못 돌아 작업 폴더가 C:\sum-studio-tmp\ 아래
+// 계속 쌓인다. 시작 시 1회만 비운다 — 진행 중인 렌더가 있을 수 있는 시점(작업 실행 중)에는
+// 절대 호출하지 않고, 주기적 타이머로도 돌리지 않는다. 정리 실패는 앱 실행을 막을 이유가
+// 아니므로 절대 throw하지 않고 삼키되, 조용히 넘어가지 않도록 로그는 남긴다.
+const SWEEP_MAX_ENTRIES = 1000;
+function sweepTmpRoot() {
+  try {
+    // tmpDir()과 반드시 같은 경로 계산식을 써야 한다 — 어긋나면 아무것도 안 지우면서 지운 척하게 된다.
+    const root = process.platform === 'win32' ? 'C:\\sum-studio-tmp' : path.join(os.tmpdir(), 'sum-studio');
+    if (!fs.existsSync(root)) return;
+    const entries = fs.readdirSync(root).slice(0, SWEEP_MAX_ENTRIES);
+    for (const entry of entries) {
+      try {
+        fs.rmSync(path.join(root, entry), { recursive: true, force: true });
+      } catch (error) {
+        log(`[정리] 임시 폴더 항목을 지우지 못했습니다: ${entry} — ${error.message}`);
+      }
+    }
+  } catch (error) {
+    log(`[정리] 임시 폴더 정리 중 오류가 발생했지만 앱 실행은 계속합니다: ${error.message}`);
+  }
+}
 function send(channel, payload) {
   try { mainWindow && mainWindow.webContents.send(channel, payload); } catch {}
 }
@@ -342,7 +365,10 @@ function createWindow() {
   else mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  sweepTmpRoot();
+  createWindow();
+});
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 

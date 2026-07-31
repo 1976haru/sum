@@ -57,17 +57,21 @@ export const LOCATION_PRESETS: Record<LocationPresetId, LocationPreset> = {
   }
 };
 
+// 계절 = 소재/재질만 서술한다(조명·색보정 어휘 금지). 조명은 TIME_PRESETS가 전담하고,
+// 색보정은 SPEC_BLOCK이 전담한다 — 두 절이 서로 다른 축을 겹쳐 쓰면 방향이 충돌한다
+// (예: "cool blue-grey light" vs "golden hour sunlight"). promptBuilder.test.ts의
+// 조명 중복 린터가 이 분리를 강제한다.
 export const SEASON_PRESETS: Record<SeasonPresetId, SeasonPreset> = {
-  spring: { label: '봄', mood: 'soft cherry blossoms drifting in the air, pastel tones' },
-  summer: { label: '여름', mood: 'bright warm sun, long soft shadows, humid air' },
-  autumn: { label: '가을', mood: 'amber and rust-colored foliage, crisp low light' },
-  winter: { label: '겨울', mood: 'quiet snowfall, cool blue-grey light with warm accents' }
+  spring: { label: '봄', mood: 'cherry blossom petals drifting in the air, fresh green shoots' },
+  summer: { label: '여름', mood: 'lush green foliage, humid air, sun-dried stone surfaces' },
+  autumn: { label: '가을', mood: 'amber and rust-colored foliage, fallen leaves on the ground' },
+  winter: { label: '겨울', mood: 'quiet snowfall, frost on the window glass, bare branches' }
 };
 
 export const TIME_PRESETS: Record<TimePresetId, TimePreset> = {
-  morning: { label: '아침', mood: 'early morning light, soft and cool' },
+  morning: { label: '아침', mood: 'early morning light, soft and cool, long pale shadows' },
   'golden-hour': { label: 'golden hour', mood: 'golden hour sunlight, long warm shadows' },
-  night: { label: '밤', mood: 'quiet night ambience, warm window light against a dark blue sky' }
+  night: { label: '밤', mood: 'night ambience, warm window light against a dark blue sky' }
 };
 
 const TEXT_ZONE_NOTES: Record<TextZone, string> = {
