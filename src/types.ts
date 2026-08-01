@@ -24,6 +24,31 @@ export interface AudioTrack extends PickedFile {
   id: string;
   title: string;
   duration: number;
+  // 길이 측정(ffprobe) 실패 사유. 있으면 duration은 신뢰할 수 없다(0으로 조용히 넘기지 않는다).
+  durationError?: string;
+}
+
+export type ChapterIssueLevel = 'error' | 'warning';
+
+export interface ChapterIssue {
+  level: ChapterIssueLevel;
+  code: 'TOO_FEW' | 'TOO_SHORT' | 'DUPLICATE_TIME' | 'TITLE_TOO_LONG';
+  message: string;
+}
+
+export interface ChapterCue {
+  index: number;
+  title: string;
+  duration: number;
+  start: number;
+  end: number;
+}
+
+export interface ChapterBuildResult {
+  lines: string[];
+  text: string;
+  issues: ChapterIssue[];
+  cues: ChapterCue[];
 }
 
 // 스텝③ 미리보기에서 드래그로 직접 배치한 텍스트 박스. 모든 값은 0~1 정규화 좌표다
@@ -170,6 +195,7 @@ export interface ChecklistSetRow {
   season: string;
   projectName: string;
   moodHint: string;
+  trackTarget: string;
   backgroundDirection: string;
   titleExample: string;
   keywords: string;

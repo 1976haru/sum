@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('sumAPI', {
   pickAudio: () => ipcRenderer.invoke('dialog:pick-audio'),
+  pickAudioFolder: () => ipcRenderer.invoke('dialog:pick-audio-folder'),
   pickImages: () => ipcRenderer.invoke('dialog:pick-images'),
   pickOutputDir: () => ipcRenderer.invoke('dialog:pick-output-dir'),
   readImage: (filePath) => ipcRenderer.invoke('file:read-image', filePath),
@@ -11,6 +12,7 @@ contextBridge.exposeInMainWorld('sumAPI', {
   renderPlaylist: (input) => ipcRenderer.invoke('playlist:render', input),
   cancelRender: (jobId) => ipcRenderer.invoke('playlist:cancel', jobId),
   exportCapcutKit: (input) => ipcRenderer.invoke('capcut:export-kit', input),
+  buildChapters: (tracks) => ipcRenderer.invoke('chapters:build', tracks),
   openPath: (targetPath) => ipcRenderer.invoke('shell:open-path', targetPath),
   loadBrandTemplates: () => ipcRenderer.invoke('brand:load-templates'),
   saveBrandTemplate: (template) => ipcRenderer.invoke('brand:save-template', template),

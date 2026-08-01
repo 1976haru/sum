@@ -70,6 +70,16 @@ describe('checklist.cjs — 픽스처(실제 버그를 재현하는 xlsx)로 실
     for (const row of sheets['일본채널']) expect(hasJapanese.test(row.backgroundDirection)).toBe(true);
   });
 
+  it('6-1) F열(곡수목표): 18건 전부 비어있지 않은 숫자 문자열이다', () => {
+    const sheets = checklist.parseChecklistXlsx(FIXTURE_PATH);
+    for (const sheetName of ['한국채널', '일본채널'] as const) {
+      for (const row of sheets[sheetName]) {
+        expect(row.trackTarget.length).toBeGreaterThan(0);
+        expect(Number.isFinite(Number(row.trackTarget))).toBe(true);
+      }
+    }
+  });
+
   it('7) 헤더 변조 시(7행 D열) 에러를 던진다', () => {
     const tamperedPath = withTamperedFixture(workbook => {
       const sheet = workbook.Sheets['한국채널'];

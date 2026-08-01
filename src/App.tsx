@@ -55,6 +55,9 @@ export default function App() {
   const [aiSettings, setAiSettings] = useState<(AIImageSettings & { hasQwenKey?: boolean; hasGeminiKey?: boolean }) | null>(null);
   const [aspect, setAspect] = useState<AspectKind>('16x9');
   const [backgroundExtra, setBackgroundExtra] = useState('');
+  // 체크리스트 F열(곡수목표) — ExportStep에 갇혀 있던 체크리스트 상태 전체를 끌어올리는 대신,
+  // VideoStudio가 실제로 필요한 이 값 하나만 세트 적용 시점에 끌어올린다.
+  const [trackTarget, setTrackTarget] = useState('');
 
   const channelLabel = useMemo(() => {
     if (config.channelPreset === 'morning-showa-cafe') return '아침의쇼와카페';
@@ -146,7 +149,7 @@ export default function App() {
       </nav>
 
       {view === 'video' && (
-        <VideoStudio projectName={config.projectName} outputDir={outputDir} onOutputDirChange={setOutputDir} thumbnailPath={thumbnailPath} onThumbnailPathChange={setThumbnailPath} />
+        <VideoStudio projectName={config.projectName} outputDir={outputDir} onOutputDirChange={setOutputDir} thumbnailPath={thumbnailPath} onThumbnailPathChange={setThumbnailPath} trackTarget={trackTarget} />
       )}
 
       {view === 'studio' && (
@@ -201,6 +204,7 @@ export default function App() {
                 onApplyChecklistSet={patch => {
                   patchConfig({ projectName: patch.projectName, season: patch.season });
                   setBackgroundExtra(patch.backgroundExtra);
+                  setTrackTarget(patch.trackTarget);
                 }}
               />
             </StepShell>

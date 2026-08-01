@@ -6,6 +6,8 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const archiver = require('archiver');
 const { parseChecklistXlsx } = require('./checklist.cjs');
+const chapters = require('./chapters.cjs');
+const audioFiles = require('./audioFiles.cjs');
 const ffmpegStatic = require('ffmpeg-static');
 const ffprobeStatic = require('ffprobe-static');
 
@@ -60,22 +62,9 @@ function log(line) { send('job:log', String(line)); }
 function progress(jobId, stage, percent, label) {
   send('job:progress', { jobId, stage, percent: Math.max(0, Math.min(100, Math.round(percent))), label });
 }
-function formatChapter(seconds) {
-  const total = Math.max(0, Math.floor(seconds));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  const pad = (n) => String(n).padStart(2, '0');
-  return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
-}
-function formatSrt(seconds) {
-  const ms = Math.max(0, Math.floor(seconds * 1000));
-  const h = Math.floor(ms / 3600000);
-  const m = Math.floor((ms % 3600000) / 60000);
-  const s = Math.floor((ms % 60000) / 1000);
-  const rest = ms % 1000;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(rest).padStart(3, '0')}`;
-}
+// 시간 포맷은 electron/chapters.cjs 하나만 쓴다(두 벌 금지) — CapCut Kit의 챕터/타임라인과
+// 아래 렌더 진행률 로그가 같은 포맷을 쓰도록 보장한다.
+const { formatChapter } = chapters;
 function probe(filePath) {
   return new Promise((resolve, reject) => {
     const child = spawn(ffprobePath, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filePath], { windowsHide: true });
@@ -377,7 +366,21 @@ ipcMain.handle('dialog:pick-audio', async () => {
     title: '플레이리스트 음원 선택', properties: ['openFile', 'multiSelections'],
     filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg'] }]
   });
-  return result.canceled ? [] : result.filePaths.map(filePath => ({ path: filePath, name: path.basename(filePath) }));
+  if (result.canceled) return [];
+  const files = result.filePaths.map(filePath => ({ path: filePath, name: path.basename(filePath) }));
+  return audioFiles.sortAudioFilesNatural(files);
+});
+ipcMain.handle('dialog:pick-audio-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, { title: '음원 폴더 선택', properties: ['openDirectory'] });
+  if (result.canceled) return { files: [], truncated: false };
+  const dir = result.filePaths[0];
+  // 재귀 금지 — 하위 폴더는 훑지 않는다. withFileTypes로 폴더 자체를 걸러낸다.
+  const entries = fs.readdirSync(dir, { withFileTypes: true })
+    .filter(entry => entry.isFile() && audioFiles.isAudioFileName(entry.name))
+    .map(entry => ({ path: path.join(dir, entry.name), name: entry.name }));
+  const sorted = audioFiles.sortAudioFilesNatural(entries);
+  const truncated = sorted.length > audioFiles.MAX_TRACKS_PER_SET;
+  return { files: sorted.slice(0, audioFiles.MAX_TRACKS_PER_SET), truncated };
 });
 ipcMain.handle('dialog:pick-images', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
@@ -525,6 +528,9 @@ ipcMain.handle('playlist:render', async (_event, input) => {
   }
 });
 
+// input.tracks의 duration/title로 미디어 파일명을 먼저 확정한 뒤(파일 저장 관심사라
+// chapters.cjs 몫이 아니다), 실제 챕터/타임라인/SRT 텍스트는 전부 chapters.cjs 하나로 만든다
+// — ZIP 안 내용물과 chapters:build IPC(미리보기)가 절대 두 벌로 어긋나지 않는다.
 ipcMain.handle('capcut:export-kit', async (_event, input) => {
   const outputDir = input.outputDir || app.getPath('downloads');
   fs.mkdirSync(outputDir, { recursive: true });
@@ -536,32 +542,33 @@ ipcMain.handle('capcut:export-kit', async (_event, input) => {
     archive.on('error', reject);
   });
   archive.pipe(output);
-  let cursor = 0;
-  const chapters = [];
-  const timeline = ['index,start,end,duration,title,file'];
-  const srt = [];
-  const manifestTracks = [];
+
+  const tracksWithFile = [];
   for (let i = 0; i < input.tracks.length; i++) {
     const track = input.tracks[i];
     const duration = Number(track.duration) || await probe(track.path);
-    const start = cursor;
-    const end = cursor + duration;
     const mediaName = `${String(i + 1).padStart(2, '0')}_${safeName(track.title || path.basename(track.path, path.extname(track.path)), `track_${i + 1}`, 70)}${path.extname(track.path)}`;
     archive.file(track.path, { name: `media/${mediaName}` });
-    chapters.push(`${formatChapter(start)} ${track.title || `Track ${i + 1}`}`);
-    timeline.push([i + 1, start.toFixed(3), end.toFixed(3), duration.toFixed(3), JSON.stringify(track.title || ''), JSON.stringify(mediaName)].join(','));
-    srt.push(String(i + 1), `${formatSrt(start)} --> ${formatSrt(Math.min(end, start + 8))}`, track.title || `Track ${i + 1}`, '');
-    manifestTracks.push({ index: i + 1, title: track.title, file: mediaName, start, end, duration });
-    cursor = end;
+    tracksWithFile.push({ ...track, duration, file: mediaName });
   }
+
+  const built = chapters.buildChapters(tracksWithFile);
+  const timelineCsv = chapters.buildTimelineCsv(tracksWithFile);
+  const srtText = chapters.buildSrt(tracksWithFile);
+  const totalDuration = built.cues.length ? built.cues[built.cues.length - 1].end : 0;
+  const manifestTracks = built.cues.map(cue => ({ index: cue.index, title: cue.title, file: cue.file, start: cue.start, end: cue.end, duration: cue.duration }));
+
   if (input.thumbnailPath && fs.existsSync(input.thumbnailPath)) archive.file(input.thumbnailPath, { name: `thumbnail/${path.basename(input.thumbnailPath)}` });
-  archive.append(chapters.join('\n') + '\n', { name: 'youtube_chapters.txt' });
-  archive.append(timeline.join('\n') + '\n', { name: 'timeline.csv' });
-  archive.append(srt.join('\n'), { name: 'track_titles.srt' });
-  archive.append(JSON.stringify({ projectName: input.projectName, createdAt: new Date().toISOString(), totalDuration: cursor, tracks: manifestTracks }, null, 2), { name: 'project_manifest.json' });
+  archive.append(built.text, { name: 'youtube_chapters.txt' });
+  archive.append(timelineCsv, { name: 'timeline.csv' });
+  archive.append(srtText, { name: 'track_titles.srt' });
+  archive.append(JSON.stringify({ projectName: input.projectName, createdAt: new Date().toISOString(), totalDuration, tracks: manifestTracks, chapterIssues: built.issues }, null, 2), { name: 'project_manifest.json' });
   archive.append('1. CapCut에서 새 프로젝트를 만듭니다.\n2. media 폴더의 음원을 순서대로 불러옵니다.\n3. thumbnail 폴더의 이미지를 배경으로 배치합니다.\n4. track_titles.srt를 자막으로 가져옵니다.\n5. youtube_chapters.txt를 유튜브 설명란에 붙여넣습니다.\n\n이 ZIP은 CapCut 비공개 내부 프로젝트 파일을 수정하지 않는 안전한 가져오기용 패키지입니다.\n', { name: 'CAPCUT_IMPORT_GUIDE_KO.txt' });
   archive.finalize();
   await done;
   shell.showItemInFolder(dest);
-  return dest;
+  // error 레벨 문제가 있어도 ZIP은 만든다 — 내보내기를 막지 않고, 문제 목록을 돌려줘 UI가 표시하게 한다.
+  return { path: dest, issues: built.issues };
 });
+
+ipcMain.handle('chapters:build', (_event, tracks) => chapters.buildChapters(Array.isArray(tracks) ? tracks : []));

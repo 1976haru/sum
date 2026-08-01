@@ -8,7 +8,7 @@ const CHECKLIST_DATA_START_ROW = 8; // 1-based
 const MAX_SHEET_ROWS = 500; // 파트G: 어떤 대용량 반복도 이 상한을 넘기지 않는다.
 
 const CHECKLIST_EXPECTED_HEADERS = {
-  A: '번호', B: '공개목표', C: '시즌', D: '곡세트/영상기획', E: '핵심청자·상황',
+  A: '번호', B: '공개목표', C: '시즌', D: '곡세트/영상기획', E: '핵심청자·상황', F: '곡수목표',
   K: '썸네일/배경 방향', L: '유튜브 제목 예시', M: '핵심 키워드', R: '썸네일'
 };
 
@@ -59,6 +59,7 @@ function parseChecklistSheet(worksheet, sheetName, onWarn) {
       season: cellsToText(row.C),
       projectName: cellsToText(row.D),
       moodHint: cellsToText(row.E),
+      trackTarget: cellsToText(row.F),
       backgroundDirection: cellsToText(row.K),
       titleExample: cellsToText(row.L),
       keywords: cellsToText(row.M),

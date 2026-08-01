@@ -101,6 +101,19 @@ input[type="range"] { padding: 0; accent-color: #a87939; }
 .batch-name { font-weight: 700; }
 .batch-reason { color: #8c8274; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .batch-warning { color: #a3401f; white-space: normal; }
+
+.track-summary { gap: 10px; flex-wrap: wrap; }
+.track-target { padding: 2px 10px; border-radius: 999px; background: #f1e4c9; color: #8a6b3a; font-size: 11px; font-weight: 800; }
+.track-target.ok { background: #dcefe1; color: #1c6b3f; }
+.track-row.track-error { border-color: #f0d3c8; background: #fff6f2; }
+.track-error-text { display: flex; align-items: center; gap: 5px; color: #a13d2b !important; }
+.track-timeline { color: #a4855a; }
+.track-warning-inline { color: #a3401f; font-weight: 700; }
+.chapter-issue { display: flex; align-items: flex-start; gap: 6px; margin: 4px 0; padding: 6px 10px; border-radius: 9px; font-size: 12px; line-height: 1.5; }
+.chapter-issue.error { color: #a13d2b; background: #fff6f2; border: 1px solid #f0d3c8; }
+.chapter-issue.warning { color: #8a6b3a; background: #fbf3e2; border: 1px solid #ecdcb8; }
+.chapter-issue.ok { color: #1c6b3f; background: #f0f8f2; border: 1px solid #cfe6d6; }
+.chapter-preview { min-height: 90px; max-height: 220px; }
 .section-gap { margin-top: 22px; padding-top: 16px; border-top: 1px solid #e8dfd1; }
 
 /* --- 스튜디오 셸: 사이드바 + 4스텝 + 상시 미리보기 --- */

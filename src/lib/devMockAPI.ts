@@ -27,8 +27,33 @@ if (typeof window !== 'undefined' && !(window as unknown as { sumAPI?: unknown }
     }
   }
 
+  // 개발용 간이 챕터 계산 — 실제 검증(TOO_SHORT/DUPLICATE_TIME 등)은 electron/chapters.cjs가
+  // 유일한 소스다. 이 목은 Electron 없이 vite dev로 UI만 확인할 때 쓰는 표시용 근사치일 뿐이다.
+  function mockFormatChapter(seconds: number) {
+    const total = Math.max(0, Math.floor(seconds));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+  }
+
   (window as unknown as { sumAPI: Record<string, unknown> }).sumAPI = {
     pickAudio: async () => [],
+    pickAudioFolder: async () => ({ files: [], truncated: false }),
+    buildChapters: async (tracks: Array<{ title?: string; duration: number }>) => {
+      let cursor = 0;
+      const cues = tracks.map((t, i) => {
+        const duration = Number(t.duration) || 0;
+        const title = t.title || `Track ${i + 1}`;
+        const start = cursor;
+        const end = cursor + duration;
+        cursor = end;
+        return { index: i + 1, title, duration, start, end };
+      });
+      const lines = cues.map(cue => `${mockFormatChapter(cue.start)} ${cue.title}`);
+      return { lines, text: lines.length ? `${lines.join('\n')}\n` : '', issues: [], cues };
+    },
     pickImages: async () => {
       seq += 1;
       const path = `mock://bright-${seq}.png`;
@@ -44,7 +69,7 @@ if (typeof window !== 'undefined' && !(window as unknown as { sumAPI?: unknown }
     },
     renderPlaylist: async () => ({ outputPath: 'C:/mock-output/out.mp4', duration: 0 }),
     cancelRender: async () => true,
-    exportCapcutKit: async () => 'C:/mock-output/kit.zip',
+    exportCapcutKit: async () => ({ path: 'C:/mock-output/kit.zip', issues: [] }),
     openPath: async () => '',
     loadBrandTemplates: async () => readJSON('mock-brand-templates', []),
     saveBrandTemplate: async (template: { channelPreset: string }) => {

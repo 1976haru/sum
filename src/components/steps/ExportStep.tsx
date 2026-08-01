@@ -16,7 +16,7 @@ interface ExportStepProps {
   onOutputDirChange: (value: string) => void;
   channelLabel: string;
   onExported: () => void;
-  onApplyChecklistSet: (patch: { projectName: string; season: string; backgroundExtra: string }) => void;
+  onApplyChecklistSet: (patch: { projectName: string; season: string; backgroundExtra: string; trackTarget: string }) => void;
 }
 
 // 어떤 대용량 반복도 이 상한을 넘기지 않는다: 못 맞춰도 경고 후 남은 항목은 건너뛰고 반환한다(파트G).
@@ -89,7 +89,7 @@ export default function ExportStep({ config, coverBase, coverHeadline, releaseTi
     setChannelCode(slug(CHECKLIST_CHANNEL_LABEL[checklistSheetName]));
     setSetNumber(row.setNumber);
     setAppliedSetNumber(row.setNumber);
-    onApplyChecklistSet({ projectName: row.projectName, season: row.season, backgroundExtra: row.backgroundDirection });
+    onApplyChecklistSet({ projectName: row.projectName, season: row.season, backgroundExtra: row.backgroundDirection, trackTarget: row.trackTarget });
     setChecklistMessage(`${checklistSheetName} Set${row.setNumber}(${row.projectName})을(를) 적용했습니다. 문구는 편집 가능합니다.`);
   }
 
