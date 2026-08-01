@@ -1,4 +1,4 @@
-import type { AIImageSettings, AspectKind, BackgroundInspection, CapcutKitRequest, ChannelBrandTemplate, ChannelPresetId, ChapterBuildResult, ChecklistSheets, JobProgress, PickedFile, RenderRequest } from './types';
+import type { AIImageSettings, AspectKind, BackgroundInspection, CapcutKitRequest, ChannelBrandTemplate, ChannelPresetId, ChapterBuildResult, ChecklistSheets, DescriptionBuildResult, JobProgress, PickedFile, RenderRequest, RenderResult } from './types';
 
 declare global {
   interface Window {
@@ -11,10 +11,11 @@ declare global {
       probeAudio(filePath: string): Promise<number>;
       saveThumbnail(input: { dataUrl: string; outputDir: string; fileName: string; format: 'jpg' | 'png' }): Promise<string>;
       saveTextFile(input: { outputDir: string; fileName: string; content: string }): Promise<string>;
-      renderPlaylist(input: RenderRequest): Promise<{ outputPath: string; duration: number }>;
+      renderPlaylist(input: RenderRequest): Promise<RenderResult>;
       cancelRender(jobId: string): Promise<boolean>;
       exportCapcutKit(input: CapcutKitRequest): Promise<{ path: string; issues: ChapterBuildResult['issues'] }>;
       buildChapters(tracks: Array<{ title?: string; duration: number }>): Promise<ChapterBuildResult>;
+      buildDescription(input: { greeting?: string; chaptersText?: string; keywords?: string; footer?: string }): Promise<DescriptionBuildResult>;
       openPath(targetPath: string): Promise<string>;
       loadBrandTemplates(): Promise<ChannelBrandTemplate[]>;
       saveBrandTemplate(template: ChannelBrandTemplate): Promise<ChannelBrandTemplate[]>;

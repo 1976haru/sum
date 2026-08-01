@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('sumAPI', {
   cancelRender: (jobId) => ipcRenderer.invoke('playlist:cancel', jobId),
   exportCapcutKit: (input) => ipcRenderer.invoke('capcut:export-kit', input),
   buildChapters: (tracks) => ipcRenderer.invoke('chapters:build', tracks),
+  buildDescription: (input) => ipcRenderer.invoke('description:build', input),
   openPath: (targetPath) => ipcRenderer.invoke('shell:open-path', targetPath),
   loadBrandTemplates: () => ipcRenderer.invoke('brand:load-templates'),
   saveBrandTemplate: (template) => ipcRenderer.invoke('brand:save-template', template),

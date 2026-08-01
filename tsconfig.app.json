@@ -3,7 +3,11 @@
     "target": "ES2020",
     "useDefineForClassFields": true,
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
-    "allowJs": false,
+    // Phase 2-2: devMockAPI.ts가 electron/chapters.cjs·description.cjs를 실제로 import해서 쓴다
+    // (mock이 실제 로직과 어긋나는 것을 막기 위함). 이 두 파일은 브라우저에서도 도는 순수 JS라
+    // 번들에 넣을 수 있지만, tsc가 .cjs를 모듈로 인식하려면 allowJs가 필요하다. checkJs는 켜지
+    // 않으므로 electron/*.cjs 자체의 타입 오류가 src 쪽 타입체크를 막지는 않는다.
+    "allowJs": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,

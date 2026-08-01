@@ -86,6 +86,9 @@ export interface ProjectConfig {
   showBadge: boolean;
   showDivider: boolean;
   showSubline: boolean;
+  // Phase 2-2: description.txt 조립용 채널 고정 문구. ChannelBrandTemplate과 짝을 이룬다.
+  channelGreeting: string;
+  channelFooter: string;
 }
 
 export interface ThumbnailRenderInput extends ProjectConfig {
@@ -135,6 +138,8 @@ export interface ChannelBrandTemplate {
   showBadge: boolean;
   showDivider: boolean;
   showSubline: boolean;
+  channelGreeting: string;
+  channelFooter: string;
   updatedAt: string;
 }
 
@@ -178,6 +183,15 @@ export interface JobProgress {
   label: string;
 }
 
+// description.txt 조립에 필요한 입력. chaptersText는 렌더 쪽(electron/chapters.cjs)이 실제
+// 트랙으로 재계산한 값을 쓴다 — 미리보기(chapters:build)의 값을 그대로 신뢰하지 않는다.
+// 그래야 chapters.txt와 description.txt의 챕터 구간이 항상 문자 단위로 같다.
+export interface RenderDescriptionInput {
+  greeting: string;
+  footer: string;
+  keywords: string;
+}
+
 export interface RenderRequest {
   jobId: string;
   tracks: Array<Pick<AudioTrack, 'path' | 'title' | 'duration'>>;
@@ -185,6 +199,22 @@ export interface RenderRequest {
   outputDir: string;
   outputName: string;
   motion: MotionMode;
+  // 있으면(사용자가 커버를 저장한 적이 있으면) 산출물 폴더에 함께 담는다.
+  coverPath?: string;
+  description?: RenderDescriptionInput;
+  // src/lib/releaseMeta.ts가 만든 텍스트를 그대로 받아 파일로 적기만 한다(로직 재계산 없음).
+  metadataText?: string;
+}
+
+export type RenderResult =
+  | { cancelled: true }
+  | { cancelled: false; outputPath: string; folderPath: string; duration: number; chapterIssues: ChapterIssue[] };
+
+export interface DescriptionBuildResult {
+  text: string;
+  length: number;
+  overLimit: boolean;
+  hashtags: string[];
 }
 
 export type ChecklistSheetName = '한국채널' | '일본채널';

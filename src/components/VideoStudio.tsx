@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, ClipboardCopy, FileArchive, FolderOpen, FolderTree, Music2, Play, Square, Trash2 } from 'lucide-react';
-import type { AudioTrack, ChapterBuildResult, JobProgress, MotionMode, PickedFile } from '../types';
+import type { AudioTrack, ChapterBuildResult, DescriptionBuildResult, JobProgress, MotionMode, PickedFile } from '../types';
 import { runWithConcurrencyLimit } from '../lib/concurrency';
+import { buildReleaseMetadataText } from '../lib/releaseMeta';
 
 interface VideoStudioProps {
   projectName: string;
@@ -11,6 +12,21 @@ interface VideoStudioProps {
   onThumbnailPathChange: (value: string) => void;
   // 체크리스트 F열(곡수목표). 아직 세트를 적용하지 않았으면 빈 문자열 — 이때는 목표를 숨긴다.
   trackTarget?: string;
+  // 있으면(사용자가 실제로 커버를 저장했으면) 산출물 세트 폴더에 함께 담는다.
+  coverPath: string;
+  // description.txt 조립용 채널 고정 문구(스타일 조정 탭 · 채널 브랜드 템플릿과 짝을 이룬다).
+  channelGreeting: string;
+  channelFooter: string;
+  keywords: string;
+  onKeywordsChange: (value: string) => void;
+  releaseTitle: string;
+  artistName: string;
+  coverHeadline: string;
+}
+
+interface RenderErrorState {
+  userMessage: string | null;
+  rawStderr: string;
 }
 
 // ffprobe처럼 무거운 프로세스를 트랙 수만큼 한꺼번에 띄우지 않는다(파트G 반복 상한과 같은 취지).
@@ -38,16 +54,23 @@ async function probeTracksConcurrently(files: PickedFile[]): Promise<AudioTrack[
   });
 }
 
-export default function VideoStudio({ projectName, outputDir, onOutputDirChange, thumbnailPath, onThumbnailPathChange, trackTarget }: VideoStudioProps) {
+export default function VideoStudio({
+  projectName, outputDir, onOutputDirChange, thumbnailPath, onThumbnailPathChange, trackTarget,
+  coverPath, channelGreeting, channelFooter, keywords, onKeywordsChange, releaseTitle, artistName, coverHeadline
+}: VideoStudioProps) {
   const [tracks, setTracks] = useState<AudioTrack[]>([]);
   const [motion, setMotion] = useState<MotionMode>('still');
   const [progress, setProgress] = useState<JobProgress | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
   const [loadingAudio, setLoadingAudio] = useState(false);
   const [chapterResult, setChapterResult] = useState<ChapterBuildResult | null>(null);
   const [copyStatus, setCopyStatus] = useState('');
   const [folderMessage, setFolderMessage] = useState('');
+  const [descriptionPreview, setDescriptionPreview] = useState<DescriptionBuildResult | null>(null);
+  const [renderError, setRenderError] = useState<RenderErrorState | null>(null);
+  const [resultMessage, setResultMessage] = useState('');
   const totalDuration = useMemo(() => tracks.reduce((sum, track) => sum + track.duration, 0), [tracks]);
   const hasDurationError = tracks.some(track => track.durationError);
   const targetCount = Number(trackTarget);
@@ -69,6 +92,21 @@ export default function VideoStudio({ projectName, outputDir, onOutputDirChange,
     });
     return () => { cancelled = true; };
   }, [tracks]);
+
+  // 4: description.txt 미리보기(5000자 경고, 해시태그 배치 안내)도 매번 챕터 텍스트를 다시 물어
+  // 조립한다 — chapters.cjs가 만든 결과를 그대로 넘겨야 chapters.txt와 문자 단위로 같아진다.
+  useEffect(() => {
+    let cancelled = false;
+    void window.sumAPI.buildDescription({
+      greeting: channelGreeting,
+      chaptersText: chapterResult?.text || '',
+      keywords,
+      footer: channelFooter
+    }).then(result => {
+      if (!cancelled) setDescriptionPreview(result);
+    });
+    return () => { cancelled = true; };
+  }, [channelGreeting, channelFooter, keywords, chapterResult]);
 
   async function addAudio() {
     setLoadingAudio(true);
@@ -122,21 +160,46 @@ export default function VideoStudio({ projectName, outputDir, onOutputDirChange,
     if (!tracks.length) return alert('음원을 먼저 불러오세요.');
     if (!thumbnailPath) return alert('완성 썸네일 JPG를 선택하세요.');
     if (!outputDir) return alert('저장 폴더를 선택하세요.');
-    const jobId = crypto.randomUUID();
+    const newJobId = crypto.randomUUID();
+    setJobId(newJobId);
     setBusy(true);
     setLogs([]);
+    setRenderError(null);
+    setResultMessage('');
     try {
-      await window.sumAPI.renderPlaylist({
-        jobId,
+      // 파트E와 같은 소스: 커버 인쇄 문구·릴리스 제목이 어긋나지 않게 metadata.txt도 여기서 같이 만든다.
+      const metadataText = releaseTitle || artistName || coverHeadline
+        ? buildReleaseMetadataText({ releaseTitle, artistName, coverHeadline })
+        : undefined;
+      const result = await window.sumAPI.renderPlaylist({
+        jobId: newJobId,
         tracks: tracks.map(({ path, title, duration }) => ({ path, title, duration })),
         thumbnailPath,
         outputDir,
         outputName: projectName,
-        motion
+        motion,
+        coverPath: coverPath || undefined,
+        description: { greeting: channelGreeting, footer: channelFooter, keywords },
+        metadataText
       });
+      setResultMessage(result.cancelled ? '렌더링을 취소했습니다.' : `완료: ${result.folderPath}`);
     } catch (error) {
-      alert(error instanceof Error ? error.message : String(error));
-    } finally { setBusy(false); }
+      const message = error instanceof Error ? error.message : String(error);
+      try {
+        const parsed = JSON.parse(message) as { userMessage: string | null; rawStderr: string };
+        setRenderError({ userMessage: parsed.userMessage, rawStderr: parsed.rawStderr });
+      } catch {
+        setRenderError({ userMessage: message, rawStderr: '' });
+      }
+    } finally {
+      setBusy(false);
+      setJobId(null);
+    }
+  }
+
+  async function cancelRenderJob() {
+    if (!jobId) return;
+    await window.sumAPI.cancelRender(jobId);
   }
 
   async function exportKit() {
@@ -226,6 +289,17 @@ export default function VideoStudio({ projectName, outputDir, onOutputDirChange,
           <p className="chapter-issue ok"><CheckCircle2 size={14} /> 유튜브 챕터 조건을 모두 만족합니다.</p>
         )}
         <pre className="log-panel chapter-preview">{chapterResult?.text || '음원을 추가하면 챕터 미리보기가 여기 표시됩니다.'}</pre>
+
+        <div className="panel-heading section-gap"><div><span className="eyebrow">YOUTUBE</span><h2>설명문(description.txt) 미리보기</h2></div></div>
+        <label>핵심 키워드(쉼표로 구분 → 해시태그)<input value={keywords} onChange={event => onKeywordsChange(event.target.value)} placeholder="아침음악, 커피음악" /></label>
+        <p className="supporting">유튜브는 영상 위에 해시태그를 처음 3개만 보여줍니다 — 중요한 키워드를 앞쪽에 두세요. 인사말·고정 푸터는 스타일 조정 탭의 채널 템플릿에서 편집합니다.</p>
+        {(errorIssues.length > 0 || warningIssues.length > 0) && (
+          <p className="chapter-issue warning"><AlertTriangle size={14} /> 위 챕터 문제가 설명문에도 그대로 반영됩니다 — 챕터 미리보기를 먼저 확인하세요.</p>
+        )}
+        {descriptionPreview?.overLimit && (
+          <p className="chapter-issue error"><AlertTriangle size={14} /> 설명문이 {descriptionPreview.length}자로 유튜브 상한(5000자)을 넘었습니다. 자르지 않고 그대로 저장되니 내용을 줄여주세요.</p>
+        )}
+        <pre className="log-panel chapter-preview">{descriptionPreview?.text || '음원을 추가하면 설명문 미리보기가 여기 표시됩니다.'}</pre>
       </div>
 
       <div className="panel preview-panel">
@@ -239,10 +313,23 @@ export default function VideoStudio({ projectName, outputDir, onOutputDirChange,
         )}
         {progress && <div className="progress-card"><div><b>{progress.label}</b><span>{progress.percent}%</span></div><div className="progress-track"><span style={{ width: `${progress.percent}%` }} /></div></div>}
         <div className="action-row">
-          <button className="primary" disabled={busy || !tracks.length} onClick={renderVideo}>{busy ? <Square size={17} /> : <Play size={17} />} 긴 MP4 자동 만들기</button>
+          {busy ? (
+            <button className="secondary" onClick={() => void cancelRenderJob()}><Square size={17} /> 취소</button>
+          ) : (
+            <button className="primary" disabled={!tracks.length} onClick={() => void renderVideo()}><Play size={17} /> 긴 MP4 자동 만들기</button>
+          )}
           <button className="secondary" disabled={busy || !tracks.length} onClick={exportKit}><FileArchive size={17} /> CapCut Kit ZIP</button>
         </div>
-        <p className="supporting">CapCut Kit에는 음원, 썸네일, 트랙 제목 SRT, 타임라인 CSV, YouTube 챕터가 들어갑니다.</p>
+        <p className="supporting">CapCut Kit에는 음원, 썸네일, 트랙 제목 SRT, 타임라인 CSV, YouTube 챕터가 들어갑니다. MP4 렌더는 mp4·썸네일·커버(있으면)·챕터·설명문·타임라인·메타데이터를 세트 폴더 하나에 모읍니다.</p>
+        {resultMessage && <p className="supporting step-message">{resultMessage}</p>}
+        {renderError && (
+          <div className="chapter-issue error">
+            <AlertTriangle size={14} /> {renderError.userMessage || '렌더링 중 오류가 발생했습니다.'}
+            {renderError.rawStderr && (
+              <details><summary>원본 로그 보기</summary><pre className="log-panel">{renderError.rawStderr}</pre></details>
+            )}
+          </div>
+        )}
         <pre className="log-panel">{logs.length ? logs.join('\n') : '작업 로그가 여기에 표시됩니다.'}</pre>
       </div>
     </section>

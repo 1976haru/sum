@@ -33,7 +33,9 @@ const DEFAULT_CONFIG: ProjectConfig = {
   brandLine: 'P L A Y L I S T',
   showBadge: true,
   showDivider: true,
-  showSubline: true
+  showSubline: true,
+  channelGreeting: '',
+  channelFooter: ''
 };
 
 type View = 'studio' | 'video' | 'settings';
@@ -50,6 +52,12 @@ export default function App() {
   const coverHeadline = coverHeadlineOverride ? coverHeadlineOverrideValue : releaseTitle;
   const [outputDir, setOutputDir] = useState('');
   const [thumbnailPath, setThumbnailPath] = useState('');
+  // 마지막으로 저장한 커버 파일 경로. 있으면(사용자가 실제로 커버를 저장했으면) 영상 렌더 시
+  // 산출물 세트 폴더에 함께 담는다(Phase 2-2 섹션 3, "cover.jpg (있으면)").
+  const [coverPath, setCoverPath] = useState('');
+  // 체크리스트 M열(핵심 키워드) — description.txt 해시태그 변환의 원문. ExportStep에서 세트를
+  // 적용할 때 함께 끌어올리고, 영상 탭에서 편집할 수 있다.
+  const [keywords, setKeywords] = useState('');
   const [expandedStep, setExpandedStep] = useState(0);
   const [exported, setExported] = useState(false);
   const [aiSettings, setAiSettings] = useState<(AIImageSettings & { hasQwenKey?: boolean; hasGeminiKey?: boolean }) | null>(null);
@@ -110,7 +118,9 @@ export default function App() {
         brandLine: match.brandLine,
         showBadge: match.showBadge,
         showDivider: match.showDivider,
-        showSubline: match.showSubline
+        showSubline: match.showSubline,
+        channelGreeting: match.channelGreeting,
+        channelFooter: match.channelFooter
       }));
       if (match.artistName) setArtistName(match.artistName);
     });
@@ -149,7 +159,22 @@ export default function App() {
       </nav>
 
       {view === 'video' && (
-        <VideoStudio projectName={config.projectName} outputDir={outputDir} onOutputDirChange={setOutputDir} thumbnailPath={thumbnailPath} onThumbnailPathChange={setThumbnailPath} trackTarget={trackTarget} />
+        <VideoStudio
+          projectName={config.projectName}
+          outputDir={outputDir}
+          onOutputDirChange={setOutputDir}
+          thumbnailPath={thumbnailPath}
+          onThumbnailPathChange={setThumbnailPath}
+          trackTarget={trackTarget}
+          coverPath={coverPath}
+          channelGreeting={config.channelGreeting}
+          channelFooter={config.channelFooter}
+          keywords={keywords}
+          onKeywordsChange={setKeywords}
+          releaseTitle={releaseTitle}
+          artistName={artistName}
+          coverHeadline={coverHeadline}
+        />
       )}
 
       {view === 'studio' && (
@@ -201,10 +226,12 @@ export default function App() {
                 onOutputDirChange={setOutputDir}
                 channelLabel={channelLabel}
                 onExported={() => setExported(true)}
+                onCoverSaved={setCoverPath}
                 onApplyChecklistSet={patch => {
                   patchConfig({ projectName: patch.projectName, season: patch.season });
                   setBackgroundExtra(patch.backgroundExtra);
                   setTrackTarget(patch.trackTarget);
+                  setKeywords(patch.keywords);
                 }}
               />
             </StepShell>

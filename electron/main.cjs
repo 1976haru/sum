@@ -8,10 +8,17 @@ const archiver = require('archiver');
 const { parseChecklistXlsx } = require('./checklist.cjs');
 const chapters = require('./chapters.cjs');
 const audioFiles = require('./audioFiles.cjs');
+const diskSpace = require('./diskSpace.cjs');
+const ffmpegErrors = require('./ffmpegErrors.cjs');
+const uniqueName = require('./uniqueName.cjs');
+const description = require('./description.cjs');
 const ffmpegStatic = require('ffmpeg-static');
 const ffprobeStatic = require('ffprobe-static');
 
 const activeJobs = new Map();
+// playlist:cancel이 호출된 jobId만 담는다 — child.kill()의 종료 코드/신호만으로는 "사용자가
+// 취소했다"와 "정말 실패했다"를 안정적으로 구분할 수 없어(플랫폼별로 다름) 의도를 직접 기록한다.
+const cancelledJobs = new Set();
 let mainWindow = null;
 
 function unpacked(binaryPath) {
@@ -462,43 +469,89 @@ ipcMain.handle('checklist:load-xlsx', (_event, filePath) => loadChecklistXlsx(fi
 ipcMain.handle('clipboard:write-text', (_event, text) => { clipboard.writeText(String(text || '')); return true; });
 ipcMain.handle('playlist:cancel', (_event, jobId) => {
   const child = activeJobs.get(jobId);
-  if (child) child.kill('SIGKILL');
+  if (child) {
+    cancelledJobs.add(jobId);
+    child.kill('SIGKILL');
+  }
   return Boolean(child);
 });
+
+function removeIfEmpty(dir) {
+  try {
+    if (fs.existsSync(dir) && fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
+  } catch (error) {
+    log(`[정리] 빈 폴더를 지우지 못했습니다: ${dir} — ${error.message}`);
+  }
+}
+function mb(bytes) {
+  return Math.max(0, Math.round(bytes / (1024 * 1024)));
+}
 
 ipcMain.handle('playlist:render', async (_event, input) => {
   const jobId = input.jobId || crypto.randomUUID();
   const outputDir = input.outputDir || app.getPath('downloads');
   fs.mkdirSync(outputDir, { recursive: true });
   const work = tmpDir();
-  const thumbExt = path.extname(input.thumbnailPath) || '.jpg';
-  const stagedThumb = path.join(work, `thumb${thumbExt}`);
-  fs.copyFileSync(input.thumbnailPath, stagedThumb);
-  const tracks = [];
-  for (let i = 0; i < input.tracks.length; i++) {
-    const source = input.tracks[i].path;
-    const ext = path.extname(source) || '.mp3';
-    const staged = path.join(work, `audio_${String(i).padStart(3, '0')}${ext}`);
-    fs.copyFileSync(source, staged);
-    const duration = Number(input.tracks[i].duration) || await probe(staged);
-    tracks.push({ ...input.tracks[i], path: staged, duration });
-    progress(jobId, 'probe', ((i + 1) / input.tracks.length) * 8, `길이 확인 ${i + 1}/${input.tracks.length}`);
-  }
-  const totalDuration = tracks.reduce((sum, item) => sum + item.duration, 0);
-  const outputPath = path.join(outputDir, `${safeName(input.outputName, 'playlist')}.mp4`);
-  const args = ['-y', '-loop', '1', '-framerate', input.motion === 'gentle' ? '12' : '2', '-i', stagedThumb];
-  tracks.forEach(track => args.push('-i', track.path));
-  const audioLabels = tracks.map((_track, index) => `[a${index}]`).join('');
-  const audioPrep = tracks.map((_track, index) => `[${index + 1}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a${index}]`).join(';');
-  const visual = input.motion === 'gentle'
-    ? `[0:v]scale=1408:792:force_original_aspect_ratio=increase,crop=1408:792,zoompan=z='min(zoom+0.00012,1.08)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1280x720:fps=12,format=yuv420p[vout]`
-    : `[0:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=2,format=yuv420p[vout]`;
-  const filter = `${audioPrep};${audioLabels}concat=n=${tracks.length}:v=0:a=1[aout];${visual}`;
-  args.push('-filter_complex', filter, '-map', '[vout]', '-map', '[aout]', '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'stillimage', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-t', String(totalDuration), '-progress', 'pipe:1', '-nostats', outputPath);
-  log(`[render] ${tracks.length}곡 / ${formatChapter(totalDuration)} / ${outputPath}`);
-  progress(jobId, 'encode', 8, '영상 인코딩 시작');
+  let folderPath = null;
+  let partPath = null;
   try {
-    await new Promise((resolve, reject) => {
+    // 1-1: 42분짜리 음원을 통째로 ASCII 임시 폴더에 복사하기 전에 두 곳의 여유 공간을 각각
+    // 확인한다 — (a) 복사 목적지(work, C:\sum-studio-tmp)에 입력 합계만큼, (b) 최종 저장 폴더
+    // (outputDir)에 예상 출력 용량만큼. 부족하면 복사를 시작하기도 전에 중단한다.
+    const inputPaths = [input.thumbnailPath, ...input.tracks.map(track => track.path)];
+    const inputBytes = diskSpace.sumFileSizes(inputPaths);
+    const tmpFree = diskSpace.freeSpaceBytesFor(work);
+    if (inputBytes > tmpFree) {
+      throw new Error(`디스크 공간이 부족합니다. 임시 작업 공간에 약 ${mb(inputBytes)}MB가 필요한데 남은 공간은 약 ${mb(tmpFree)}MB입니다.`);
+    }
+    const estimatedDuration = input.tracks.reduce((sum, track) => sum + (Number(track.duration) || 0), 0);
+    const outputBytesEstimate = diskSpace.estimateOutputBytes(estimatedDuration);
+    const outputFree = diskSpace.freeSpaceBytesFor(outputDir);
+    if (outputBytesEstimate > outputFree) {
+      throw new Error(`디스크 공간이 부족합니다. 저장 폴더에 약 ${mb(outputBytesEstimate)}MB가 필요할 것으로 예상되는데 남은 공간은 약 ${mb(outputFree)}MB입니다.`);
+    }
+
+    // 1-4: 세트 폴더 이름부터 충돌 없는 이름으로 확정한다 — 어제 만든 영상을 조용히 덮어쓰지 않는다.
+    const setBaseName = safeName(input.outputName, 'playlist');
+    const folderName = uniqueName.resolveUniqueName(outputDir, setBaseName, '');
+    folderPath = path.join(outputDir, folderName);
+    fs.mkdirSync(folderPath, { recursive: true });
+    partPath = path.join(folderPath, `${folderName}.part.mp4`);
+    const finalMp4Path = path.join(folderPath, `${folderName}.mp4`);
+
+    const thumbExt = path.extname(input.thumbnailPath) || '.jpg';
+    const stagedThumb = path.join(work, `thumb${thumbExt}`);
+    fs.copyFileSync(input.thumbnailPath, stagedThumb);
+    const tracks = [];
+    for (let i = 0; i < input.tracks.length; i++) {
+      const source = input.tracks[i].path;
+      const ext = path.extname(source) || '.mp3';
+      const staged = path.join(work, `audio_${String(i).padStart(3, '0')}${ext}`);
+      fs.copyFileSync(source, staged);
+      const duration = Number(input.tracks[i].duration) || await probe(staged);
+      tracks.push({ ...input.tracks[i], path: staged, duration });
+      progress(jobId, 'probe', ((i + 1) / input.tracks.length) * 8, `길이 확인 ${i + 1}/${input.tracks.length}`);
+    }
+    const totalDuration = tracks.reduce((sum, item) => sum + item.duration, 0);
+
+    // 챕터/타임라인은 여기서 딱 한 번만 계산한다 — description.txt의 챕터 구간과 chapters.txt가
+    // 항상 문자 단위로 같아야 하므로(지시서 완료 기준), 같은 값을 그대로 재사용한다.
+    const built = chapters.buildChapters(tracks);
+    const timelineCsv = chapters.buildTimelineCsv(tracks);
+
+    const args = ['-y', '-loop', '1', '-framerate', input.motion === 'gentle' ? '12' : '2', '-i', stagedThumb];
+    tracks.forEach(track => args.push('-i', track.path));
+    const audioLabels = tracks.map((_track, index) => `[a${index}]`).join('');
+    const audioPrep = tracks.map((_track, index) => `[${index + 1}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a${index}]`).join(';');
+    const visual = input.motion === 'gentle'
+      ? `[0:v]scale=1408:792:force_original_aspect_ratio=increase,crop=1408:792,zoompan=z='min(zoom+0.00012,1.08)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1280x720:fps=12,format=yuv420p[vout]`
+      : `[0:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=2,format=yuv420p[vout]`;
+    const filter = `${audioPrep};${audioLabels}concat=n=${tracks.length}:v=0:a=1[aout];${visual}`;
+    args.push('-filter_complex', filter, '-map', '[vout]', '-map', '[aout]', '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'stillimage', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-t', String(totalDuration), '-progress', 'pipe:1', '-nostats', partPath);
+    log(`[render] ${tracks.length}곡 / ${formatChapter(totalDuration)} / ${finalMp4Path}`);
+    progress(jobId, 'encode', 8, '영상 인코딩 시작');
+
+    const outcome = await new Promise((resolve, reject) => {
       const child = spawn(ffmpegPath, args, { windowsHide: true });
       activeJobs.set(jobId, child);
       let stdout = '';
@@ -511,19 +564,88 @@ ipcMain.handle('playlist:render', async (_event, input) => {
           const match = /^out_time_ms=(\d+)/.exec(line);
           if (match && totalDuration > 0) {
             const seconds = Number(match[1]) / 1000000;
-            progress(jobId, 'encode', 8 + (seconds / totalDuration) * 92, `인코딩 ${formatChapter(seconds)} / ${formatChapter(totalDuration)}`);
+            // 1-2: -movflags +faststart는 인코딩이 끝난 뒤 moov atom을 앞으로 옮기는 후처리를 한다.
+            // 그동안 out_time_ms가 더 이상 오지 않으므로, 진행률을 97%에서 멈춰두고(100%로 착각하지
+            // 않게) 별도 문구로 "아직 끝나지 않았다"는 것을 알린다. 실제 100%는 프로세스 종료 시점.
+            const encodePercent = Math.min(97, 8 + (seconds / totalDuration) * 89);
+            const label = encodePercent >= 97 ? '파일 마무리 중…' : `인코딩 ${formatChapter(seconds)} / ${formatChapter(totalDuration)}`;
+            progress(jobId, encodePercent >= 97 ? 'finalize' : 'encode', encodePercent, label);
           }
         }
       });
       child.stderr.on('data', chunk => { stderr += chunk.toString(); });
       child.on('error', reject);
-      child.on('close', code => code === 0 ? resolve() : reject(new Error(stderr.slice(-1600) || `FFmpeg 종료 코드 ${code}`)));
+      child.on('close', code => {
+        if (code === 0) return resolve({ cancelled: false });
+        const wasCancelled = cancelledJobs.has(jobId);
+        const classified = ffmpegErrors.classifyFfmpegError(stderr, { wasCancelled, exitCode: code });
+        if (classified.isCancelled) return resolve({ cancelled: true });
+        // 2: stderr 마지막 부분은 대부분 사용자가 못 읽는다 — 한국어로 분류한 메시지를 앞세우고,
+        // 원문은 그대로 함께 보내 렌더러가 접기(details) 안에 넣을 수 있게 한다. Electron IPC는
+        // Error의 message만 안정적으로 넘기므로 JSON 문자열 하나에 담는다.
+        reject(new Error(JSON.stringify({
+          userMessage: classified.userMessage,
+          rawStderr: stderr.slice(-1600) || `FFmpeg 종료 코드 ${code}`,
+          code: classified.code
+        })));
+      });
     });
+
+    if (outcome.cancelled) {
+      // 취소도 실패와 마찬가지로 부분 파일을 남기지 않는다(철칙3: 조용한 실패 금지의 반대편 —
+      // 조용한 "가짜 성공"도 금지).
+      try { fs.rmSync(partPath, { force: true }); } catch {}
+      partPath = null;
+      removeIfEmpty(folderPath);
+      return { cancelled: true };
+    }
+
+    // 1-3: 성공했을 때만 최종 이름으로 옮긴다 — 실패·취소 시 재생 불가능한 부분 파일이 완성본인
+    // 것처럼 남지 않는다. work와 달리 partPath/finalMp4Path는 같은 폴더(같은 볼륨)라 즉시 끝난다.
+    fs.renameSync(partPath, finalMp4Path);
+    partPath = null;
+
+    fs.writeFileSync(path.join(folderPath, 'chapters.txt'), built.text);
+    fs.writeFileSync(path.join(folderPath, 'timeline.csv'), timelineCsv);
+    try {
+      fs.copyFileSync(input.thumbnailPath, path.join(folderPath, `${folderName}_thumbnail${path.extname(input.thumbnailPath) || '.jpg'}`));
+    } catch (error) {
+      log(`[패키징] 썸네일을 복사하지 못했습니다: ${error.message}`);
+    }
+    if (input.coverPath && fs.existsSync(input.coverPath)) {
+      try {
+        fs.copyFileSync(input.coverPath, path.join(folderPath, `${folderName}_cover${path.extname(input.coverPath) || '.jpg'}`));
+      } catch (error) {
+        log(`[패키징] 커버를 복사하지 못했습니다: ${error.message}`);
+      }
+    }
+    if (input.metadataText) {
+      fs.writeFileSync(path.join(folderPath, 'metadata.txt'), input.metadataText);
+    }
+    if (input.description) {
+      const built2 = description.buildDescriptionText({
+        greeting: input.description.greeting,
+        chaptersText: built.text,
+        keywords: input.description.keywords,
+        footer: input.description.footer
+      });
+      // 4: 5000자 상한 초과는 경고로만 남기고 자르지 않는다 — 판단은 사용자 몫이다.
+      if (built2.overLimit) log(`[설명문] ${built2.length}자로 유튜브 설명란 상한(${description.MAX_DESCRIPTION_CHARS}자)을 넘었습니다. 자르지 않고 그대로 저장합니다.`);
+      fs.writeFileSync(path.join(folderPath, 'description.txt'), built2.text);
+    }
+
     progress(jobId, 'done', 100, '완료');
-    shell.showItemInFolder(outputPath);
-    return { outputPath, duration: totalDuration };
+    shell.showItemInFolder(folderPath);
+    return { cancelled: false, outputPath: finalMp4Path, folderPath, duration: totalDuration, chapterIssues: built.issues };
+  } catch (error) {
+    if (partPath) {
+      try { fs.rmSync(partPath, { force: true }); } catch {}
+    }
+    if (folderPath) removeIfEmpty(folderPath);
+    throw error;
   } finally {
     activeJobs.delete(jobId);
+    cancelledJobs.delete(jobId);
     try { fs.rmSync(work, { recursive: true, force: true }); } catch {}
   }
 });
@@ -572,3 +694,4 @@ ipcMain.handle('capcut:export-kit', async (_event, input) => {
 });
 
 ipcMain.handle('chapters:build', (_event, tracks) => chapters.buildChapters(Array.isArray(tracks) ? tracks : []));
+ipcMain.handle('description:build', (_event, input) => description.buildDescriptionText(input || {}));

@@ -1,6 +1,25 @@
 // 개발용 폴백: 순수 브라우저(Vite dev server)에서 Electron IPC 없이도 실제 UI를 검증할 수 있게 한다.
 // 실제 Electron에서는 preload.cjs가 이 모듈보다 먼저 window.sumAPI를 채워두므로 여기서는 아무 동작도 하지 않는다.
 // 네이티브 파일/저장 대화상자만 흉내 내고, 캔버스 렌더 엔진(thumbnail.ts/cover.ts)은 그대로 실제 코드가 동작한다.
+//
+// chapters.cjs/description.cjs는 Electron API(fs/electron)를 쓰지 않는 순수 JS라 Vite가 그대로
+// 브라우저 번들에 넣을 수 있다 — 그래서 여기서 자체 재구현 대신 실제 모듈을 그대로 불러 쓴다.
+// mock이 실제 검증 로직(TOO_SHORT 등)과 어긋나면 브라우저에서만 UI 회귀를 놓치게 된다(Phase 2-1에서 실제로 발생).
+// 이 두 파일은 여전히 Node CommonJS(.cjs, module.exports)다 — 브라우저 네이티브 ESM은 `module`을
+// 모른다. vite.config.ts의 cjsBrowserBridge 플러그인이 이 두 파일에 한해 브라우저로 나갈 때만
+// `module.exports`를 감싸 default export로 열어준다(원본 파일은 건드리지 않는다 — main.cjs의
+// require()·vitest의 createRequire()는 지금처럼 순수 CommonJS 그대로 읽는다).
+import chaptersModule from '../../electron/chapters.cjs';
+import descriptionModule from '../../electron/description.cjs';
+import type { ChapterBuildResult, DescriptionBuildResult } from '../types';
+
+const chaptersApi = chaptersModule as unknown as {
+  buildChapters: (tracks: Array<{ title?: string; duration: number }>) => ChapterBuildResult;
+};
+const descriptionApi = descriptionModule as unknown as {
+  buildDescriptionText: (input: { greeting?: string; chaptersText?: string; keywords?: string; footer?: string }) => DescriptionBuildResult;
+};
+
 if (typeof window !== 'undefined' && !(window as unknown as { sumAPI?: unknown }).sumAPI) {
   const imageStore = new Map<string, string>();
   let seq = 0;
@@ -27,33 +46,11 @@ if (typeof window !== 'undefined' && !(window as unknown as { sumAPI?: unknown }
     }
   }
 
-  // 개발용 간이 챕터 계산 — 실제 검증(TOO_SHORT/DUPLICATE_TIME 등)은 electron/chapters.cjs가
-  // 유일한 소스다. 이 목은 Electron 없이 vite dev로 UI만 확인할 때 쓰는 표시용 근사치일 뿐이다.
-  function mockFormatChapter(seconds: number) {
-    const total = Math.max(0, Math.floor(seconds));
-    const h = Math.floor(total / 3600);
-    const m = Math.floor((total % 3600) / 60);
-    const s = total % 60;
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
-  }
-
   (window as unknown as { sumAPI: Record<string, unknown> }).sumAPI = {
     pickAudio: async () => [],
     pickAudioFolder: async () => ({ files: [], truncated: false }),
-    buildChapters: async (tracks: Array<{ title?: string; duration: number }>) => {
-      let cursor = 0;
-      const cues = tracks.map((t, i) => {
-        const duration = Number(t.duration) || 0;
-        const title = t.title || `Track ${i + 1}`;
-        const start = cursor;
-        const end = cursor + duration;
-        cursor = end;
-        return { index: i + 1, title, duration, start, end };
-      });
-      const lines = cues.map(cue => `${mockFormatChapter(cue.start)} ${cue.title}`);
-      return { lines, text: lines.length ? `${lines.join('\n')}\n` : '', issues: [], cues };
-    },
+    buildChapters: async (tracks: Array<{ title?: string; duration: number }>) => chaptersApi.buildChapters(tracks),
+    buildDescription: async (input: { greeting?: string; chaptersText?: string; keywords?: string; footer?: string }) => descriptionApi.buildDescriptionText(input),
     pickImages: async () => {
       seq += 1;
       const path = `mock://bright-${seq}.png`;
@@ -67,7 +64,7 @@ if (typeof window !== 'undefined' && !(window as unknown as { sumAPI?: unknown }
       console.log('[devMockAPI] saveThumbnail', input.fileName, input.format);
       return `C:/mock-output/${input.fileName}.${input.format}`;
     },
-    renderPlaylist: async () => ({ outputPath: 'C:/mock-output/out.mp4', duration: 0 }),
+    renderPlaylist: async () => ({ cancelled: false, outputPath: 'C:/mock-output/out/out.mp4', folderPath: 'C:/mock-output/out', duration: 0, chapterIssues: [] }),
     cancelRender: async () => true,
     exportCapcutKit: async () => ({ path: 'C:/mock-output/kit.zip', issues: [] }),
     openPath: async () => '',

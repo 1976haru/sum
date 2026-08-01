@@ -16,7 +16,9 @@ interface ExportStepProps {
   onOutputDirChange: (value: string) => void;
   channelLabel: string;
   onExported: () => void;
-  onApplyChecklistSet: (patch: { projectName: string; season: string; backgroundExtra: string; trackTarget: string }) => void;
+  // 렌더 산출물 폴더에 커버를 함께 담을 수 있도록(있으면), 실제로 저장한 커버의 절대 경로를 끌어올린다.
+  onCoverSaved: (path: string) => void;
+  onApplyChecklistSet: (patch: { projectName: string; season: string; backgroundExtra: string; trackTarget: string; keywords: string }) => void;
 }
 
 // 어떤 대용량 반복도 이 상한을 넘기지 않는다: 못 맞춰도 경고 후 남은 항목은 건너뛰고 반환한다(파트G).
@@ -28,7 +30,7 @@ function slug(value: string): string {
   return value.trim().replace(/\s+/g, '') || 'Channel';
 }
 
-export default function ExportStep({ config, coverBase, coverHeadline, releaseTitle, artistName, images, outputDir, onOutputDirChange, channelLabel, onExported, onApplyChecklistSet }: ExportStepProps) {
+export default function ExportStep({ config, coverBase, coverHeadline, releaseTitle, artistName, images, outputDir, onOutputDirChange, channelLabel, onExported, onCoverSaved, onApplyChecklistSet }: ExportStepProps) {
   const [busySingle, setBusySingle] = useState(false);
   const [singleMessage, setSingleMessage] = useState('');
 
@@ -89,7 +91,7 @@ export default function ExportStep({ config, coverBase, coverHeadline, releaseTi
     setChannelCode(slug(CHECKLIST_CHANNEL_LABEL[checklistSheetName]));
     setSetNumber(row.setNumber);
     setAppliedSetNumber(row.setNumber);
-    onApplyChecklistSet({ projectName: row.projectName, season: row.season, backgroundExtra: row.backgroundDirection, trackTarget: row.trackTarget });
+    onApplyChecklistSet({ projectName: row.projectName, season: row.season, backgroundExtra: row.backgroundDirection, trackTarget: row.trackTarget, keywords: row.keywords });
     setChecklistMessage(`${checklistSheetName} Set${row.setNumber}(${row.projectName})을(를) 적용했습니다. 문구는 편집 가능합니다.`);
   }
 
@@ -108,7 +110,8 @@ export default function ExportStep({ config, coverBase, coverHeadline, releaseTi
       }
       if (kind === 'cover' || kind === 'both') {
         const dataUrl = await renderCover({ ...coverBase, headline: coverHeadline, imageDataUrl: image?.dataUrl }, COVER_SIZE);
-        await window.sumAPI.saveThumbnail({ dataUrl, outputDir: dir, fileName: `${config.projectName}_cover`, format: coverBase.format });
+        const savedCoverPath = await window.sumAPI.saveThumbnail({ dataUrl, outputDir: dir, fileName: `${config.projectName}_cover`, format: coverBase.format });
+        onCoverSaved(savedCoverPath);
         // 파트E: 커버와 같은 폴더에 등록 메타데이터를 동봉해, 인쇄 문구와 DistroKid 등록 정보가 어긋나지 않게 한다.
         const metadataText = buildReleaseMetadataText({ releaseTitle, artistName, coverHeadline });
         await window.sumAPI.saveTextFile({ outputDir: dir, fileName: `${releaseTitle || config.projectName}_metadata`, content: metadataText });

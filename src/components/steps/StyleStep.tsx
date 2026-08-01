@@ -38,6 +38,8 @@ function templateFromConfig(config: ProjectConfig, artistName: string): ChannelB
     showBadge: config.showBadge,
     showDivider: config.showDivider,
     showSubline: config.showSubline,
+    channelGreeting: config.channelGreeting,
+    channelFooter: config.channelFooter,
     updatedAt: new Date().toISOString()
   };
 }
@@ -68,7 +70,9 @@ export default function StyleStep({ config, onConfigChange, artistName, onArtist
       brandLine: template.brandLine,
       showBadge: template.showBadge,
       showDivider: template.showDivider,
-      showSubline: template.showSubline
+      showSubline: template.showSubline,
+      channelGreeting: template.channelGreeting,
+      channelFooter: template.channelFooter
     });
     if (template.artistName) onArtistNameChange(template.artistName);
     setStatus(`"${template.channelPreset}" 템플릿을 불러왔습니다.`);
@@ -122,6 +126,11 @@ export default function StyleStep({ config, onConfigChange, artistName, onArtist
         <label className="checkbox-row"><input type="checkbox" checked={config.showSubline} onChange={event => onConfigChange({ showSubline: event.target.checked })} /> 부제 표시</label>
       </div>
       <label className="checkbox-row"><input type="checkbox" checked={config.showBadge} onChange={event => onConfigChange({ showBadge: event.target.checked })} /> 하단 브랜드 배지 표시</label>
+
+      <h3 className="section-gap">설명문 고정 문구</h3>
+      <p className="supporting">영상·CapCut 탭의 description.txt 조립에 쓰입니다. 채널 템플릿으로 저장하면 이 채널로 전환할 때마다 자동 적용됩니다.</p>
+      <label>인사말 / 채널 소개<textarea rows={3} value={config.channelGreeting} onChange={event => onConfigChange({ channelGreeting: event.target.value })} placeholder="채널을 찾아주셔서 감사합니다..." /></label>
+      <label>고정 푸터(저작권/AI 생성 고지 등)<textarea rows={3} value={config.channelFooter} onChange={event => onConfigChange({ channelFooter: event.target.value })} placeholder="ⓒ ... / 이 영상은 AI로 생성된 이미지를 포함합니다." /></label>
 
       <div className="action-row">
         <button className="secondary" onClick={() => current && applyTemplate(current)} disabled={!current}><Upload size={16} /> 템플릿 불러오기</button>
